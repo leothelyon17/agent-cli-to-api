@@ -126,7 +126,7 @@ def _apply_preset() -> None:
         # Force cursor-agent provider, keep it "API-like" by disabling indexing by default.
         "cursor-fast": {
             "CODEX_PROVIDER": "cursor-agent",
-            "CURSOR_AGENT_MODEL": "gpt-5.1-codex",
+            "CURSOR_AGENT_MODEL": "gpt-5.3-codex",
             "CURSOR_AGENT_DISABLE_INDEXING": "1",
             "CODEX_LOG_MODE": "qa",
             "CODEX_LOG_MAX_CHARS": "4000",
@@ -134,7 +134,7 @@ def _apply_preset() -> None:
         },
         "cursor-auto": {
             "CODEX_PROVIDER": "cursor-agent",
-            "CURSOR_AGENT_MODEL": "composer-1",
+            "CURSOR_AGENT_MODEL": "composer-1.5",
             "CURSOR_AGENT_DISABLE_INDEXING": "1",
             "CURSOR_AGENT_WORKSPACE": "/tmp/cursor-empty-workspace",
             "CODEX_MAX_CONCURRENCY": "100",  # subprocess-based but still parallelizable
