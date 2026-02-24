@@ -134,7 +134,7 @@ def _apply_preset() -> None:
         },
         "cursor-auto": {
             "CODEX_PROVIDER": "cursor-agent",
-            "CURSOR_AGENT_MODEL": "composer-1",
+            "CURSOR_AGENT_MODEL": "auto",
             "CURSOR_AGENT_DISABLE_INDEXING": "1",
             "CURSOR_AGENT_WORKSPACE": "/tmp/cursor-empty-workspace",
             "CODEX_MAX_CONCURRENCY": "100",  # subprocess-based but still parallelizable
@@ -218,7 +218,7 @@ def _apply_preset_env() -> None:
         },
         "cursor-auto": {
             "CODEX_PROVIDER": "cursor-agent",
-            "CURSOR_AGENT_MODEL": "composer-1",
+            "CURSOR_AGENT_MODEL": "auto",
             "CURSOR_AGENT_DISABLE_INDEXING": "1",
             "CURSOR_AGENT_WORKSPACE": "/tmp/cursor-empty-workspace",
             "CODEX_MAX_CONCURRENCY": "10",

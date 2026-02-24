@@ -1664,6 +1664,9 @@ async def chat_completions(
                             "stream-json",
                             "--workspace",
                             cursor_workspace,
+                            "--force",
+                            "--trust",
+                            "--approve-mcps",
                         ]
                         if settings.cursor_agent_disable_indexing:
                             cmd.append("--disable-indexing")
@@ -1969,6 +1972,9 @@ async def chat_completions(
                                 "stream-json",
                                 "--workspace",
                                 cursor_workspace,
+                                "--force",
+                                "--trust",
+                                "--approve-mcps",
                             ]
                             if settings.cursor_agent_disable_indexing:
                                 cmd.append("--disable-indexing")
