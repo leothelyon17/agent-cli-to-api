@@ -124,7 +124,7 @@ Supported presets:
 ### Multi-provider routing
 
 Use `CODEX_PROVIDER=auto` and select providers per-request by prefixing `model`:
-- Codex: `"gpt-5.2"`
+- Codex: `"gpt-5.4"`
 - Cursor: `"cursor:<model>"`
 - Claude: `"claude:<model>"`
 - Gemini: `"gemini:<model>"`
@@ -189,7 +189,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer devtoken" \
   -d '{
-    "model":"gpt-5.2",
+    "model":"gpt-5.4",
     "messages":[{"role":"user","content":"总结一下这个仓库结构"}],
     "reasoning": {"effort":"low"},
     "stream": false
@@ -246,7 +246,7 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="devtoken")
 resp = client.chat.completions.create(
-    model="gpt-5.2",
+    model="gpt-5.4",
     messages=[{"role": "user", "content": "Hi"}],
 )
 print(resp.choices[0].message.content)
@@ -263,7 +263,7 @@ const client = new OpenAI({
 });
 
 const resp = await client.chat.completions.create({
-  model: "gpt-5.2",
+  model: "gpt-5.4",
   messages: [{ role: "user", content: "Hi" }],
 });
 
@@ -320,7 +320,7 @@ export CODEX_CLI_HOME=$PWD/.codex-gateway-home
 mkdir -p "$CODEX_CLI_HOME/.codex"
 cp ~/.codex/auth.json "$CODEX_CLI_HOME/.codex/auth.json"   # or set CODEX_API_KEY instead
 cat > "$CODEX_CLI_HOME/.codex/config.toml" <<'EOF'
-model = "gpt-5.2"
+model = "gpt-5.4"
 model_reasoning_effort = "low"
 
 [projects."/path/to/your/workspace"]
