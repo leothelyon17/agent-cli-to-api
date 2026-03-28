@@ -388,6 +388,25 @@ def _content_parts(content: Any) -> list[dict[str, Any]]:
     return [{"type": "text", "text": str(content)}]
 
 
+def _codex_input_file_part(part: dict[str, Any]) -> dict[str, Any] | None:
+    ptype = part.get("type")
+    if ptype == "file":
+        source = part.get("file")
+        if not isinstance(source, dict):
+            return None
+    elif ptype == "input_file":
+        source = part
+    else:
+        return None
+
+    out: dict[str, Any] = {"type": "input_file"}
+    for key in ("file_id", "file_data", "filename", "file_url"):
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = value.strip()
+    return out if len(out) > 1 else None
+
+
 def convert_chat_completions_to_codex_responses(
     req: ChatCompletionRequest,
     *,
@@ -486,6 +505,10 @@ def convert_chat_completions_to_codex_responses(
                     url = image
                 if isinstance(url, str) and url:
                     msg["content"].append({"type": "input_image", "image_url": url})
+            if ptype in {"file", "input_file"} and role == "user":
+                file_part = _codex_input_file_part(part)
+                if file_part is not None:
+                    msg["content"].append(file_part)
 
         out["input"].append(msg)
         if role == "assistant":

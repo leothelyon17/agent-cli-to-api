@@ -176,6 +176,7 @@ For advanced env vars, see `.env.example` and `codex_gateway/config.py`.
 - `GET /healthz`
 - `GET /debug/config` (effective runtime config; requires auth if `CODEX_GATEWAY_TOKEN` is set)
 - `GET /v1/models`
+- `POST /v1/embeddings` (proxies to OpenAI embeddings; requires `OPENAI_API_KEY` or `~/.codex/auth.json` with `OPENAI_API_KEY`)
 - `POST /v1/chat/completions` (supports `stream`)
 
 Tip: any OpenAI SDK that supports `base_url` should work by pointing it at this server.
@@ -193,6 +194,18 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
     "messages":[{"role":"user","content":"总结一下这个仓库结构"}],
     "reasoning": {"effort":"low"},
     "stream": false
+  }'
+```
+
+### Example (embeddings)
+
+```bash
+curl -s http://127.0.0.1:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer devtoken" \
+  -d '{
+    "model":"text-embedding-3-small",
+    "input":"hello world"
   }'
 ```
 
@@ -235,6 +248,31 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer devtoken" \
   -d @/tmp/payload.json
+```
+
+PDF input uses OpenAI-style `type: "file"` parts:
+
+```bash
+python - <<'PY' > /tmp/pdf-payload.json
+import base64, json
+pdf_b64 = base64.b64encode(open("label.pdf","rb").read()).decode()
+print(json.dumps({
+  "model": "gpt-5.4",
+  "stream": False,
+  "messages": [{
+    "role": "user",
+    "content": [
+      {"type": "file", "file": {"filename": "label.pdf", "file_data": pdf_b64}},
+      {"type": "text", "text": "Check these rules and summarize the key constraints."},
+    ],
+  }],
+}))
+PY
+
+curl -s http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer devtoken" \
+  -d @/tmp/pdf-payload.json
 ```
 
 ## OpenAI SDK examples

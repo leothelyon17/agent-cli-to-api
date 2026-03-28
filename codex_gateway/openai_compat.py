@@ -25,6 +25,10 @@ class ErrorResponse(BaseModel):
     error: dict[str, Any] = Field(default_factory=dict)
 
 
+class RequestInputError(ValueError):
+    pass
+
+
 class ChatCompletionRequestCompat(BaseModel):
     model: str | None = None
     messages: list[ChatMessage] | None = None
@@ -49,13 +53,46 @@ class ResponsesRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class EmbeddingsRequest(BaseModel):
+    model: str | None = None
+    input: Any = None
+    encoding_format: str | None = None
+    dimensions: int | None = None
+    user: str | None = None
+
+    # Accept extra fields from clients so the gateway can pass them upstream.
+    model_config = ConfigDict(extra="allow")
+
+
 def _coerce_responses_part(part: dict[str, Any]) -> dict[str, Any] | None:
     part_type = part.get("type")
     if part_type in {"input_text", "output_text", "text"} and isinstance(part.get("text"), str):
         return {"type": "text", "text": part["text"]}
     if part_type in {"image_url", "input_image"}:
         return part
+    file_part = _extract_openai_file_part(part)
+    if file_part is not None:
+        return {"type": "file", "file": file_part}
     return None
+
+
+def _extract_openai_file_part(part: dict[str, Any]) -> dict[str, Any] | None:
+    part_type = part.get("type")
+    if part_type == "file":
+        source = part.get("file")
+        if not isinstance(source, dict):
+            return None
+    elif part_type == "input_file":
+        source = part
+    else:
+        return None
+
+    out: dict[str, Any] = {}
+    for key in ("file_id", "file_data", "filename", "file_url"):
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = value.strip()
+    return out or None
 
 
 def _coerce_responses_content(content: Any) -> Any:
@@ -66,7 +103,7 @@ def _coerce_responses_content(content: Any) -> Any:
     if isinstance(content, dict):
         coerced = _coerce_responses_part(content)
         if coerced is not None:
-            return [coerced] if coerced.get("type") in {"image_url", "input_image"} else coerced["text"]
+            return [coerced] if coerced.get("type") in {"image_url", "input_image", "file"} else coerced["text"]
         return str(content)
     if isinstance(content, list):
         parts: list[dict[str, Any]] = []
@@ -113,7 +150,7 @@ def responses_input_to_messages(input_obj: Any) -> list[ChatMessage]:
         if item_type in {"input_text", "output_text", "text"} and isinstance(item.get("text"), str):
             _add("user", item["text"])
             return
-        if item_type in {"image_url", "input_image"}:
+        if item_type in {"image_url", "input_image", "file", "input_file"}:
             _add("user", _coerce_responses_content(item))
             return
 
@@ -257,3 +294,29 @@ def extract_image_urls(messages: list[ChatMessage]) -> list[str]:
     for message in messages:
         urls.extend(extract_image_urls_from_content(message.content))
     return urls
+
+
+def extract_file_inputs_from_content(content: Any) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    if content is None:
+        return parts
+    if isinstance(content, dict):
+        file_part = _extract_openai_file_part(content)
+        return [file_part] if file_part is not None else parts
+    if not isinstance(content, list):
+        return parts
+
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        file_part = _extract_openai_file_part(part)
+        if file_part is not None:
+            parts.append(file_part)
+    return parts
+
+
+def extract_file_inputs(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+    files: list[dict[str, Any]] = []
+    for message in messages:
+        files.extend(extract_file_inputs_from_content(message.content))
+    return files

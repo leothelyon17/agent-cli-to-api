@@ -38,17 +38,24 @@ from .claude_oauth import iter_oauth_stream_events as iter_claude_oauth_events
 from .gemini_cloudcode import generate_cloudcode as gemini_cloudcode_generate
 from .gemini_cloudcode import iter_cloudcode_stream_events as iter_gemini_cloudcode_events
 from .gemini_cloudcode import warmup_gemini_caches
-from .http_client import aclose_all as _aclose_http_clients
+from .http_client import (
+    aclose_all as _aclose_http_clients,
+    get_async_client,
+    request_json_with_retries,
+)
 from .openai_compat import (
     ChatCompletionRequest,
     ChatMessage,
     ChatCompletionRequestCompat,
+    EmbeddingsRequest,
     ErrorResponse,
     ResponsesRequest,
     compat_chat_request_to_chat_request,
+    extract_file_inputs,
     extract_image_urls,
     messages_to_prompt,
     normalize_message_content,
+    RequestInputError,
     responses_request_to_chat_request,
 )
 from .stream_json_cli import (
@@ -249,6 +256,39 @@ def _openai_error(message: str, *, status_code: int = 500) -> JSONResponse:
         }
     ).model_dump()
     return JSONResponse(status_code=status_code, content=payload)
+
+
+def _resolve_openai_embeddings_api_key() -> str | None:
+    for env_name in ("OPENAI_API_KEY", "CODEX_API_KEY"):
+        value = os.environ.get(env_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    auth = load_codex_auth(codex_cli_home=settings.codex_cli_home)
+    if isinstance(auth.api_key, str) and auth.api_key.strip():
+        return auth.api_key.strip()
+    return None
+
+
+def _resolve_openai_base_url() -> str:
+    for env_name in ("OPENAI_BASE_URL", "OPENAI_API_BASE"):
+        value = os.environ.get(env_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip().rstrip("/")
+    return "https://api.openai.com/v1"
+
+
+def _response_json_or_text(resp) -> tuple[dict[str, Any] | list[Any] | None, str]:
+    try:
+        data = resp.json()
+        if isinstance(data, (dict, list)):
+            return data, ""
+    except Exception:
+        pass
+    try:
+        return None, resp.text
+    except Exception:
+        return None, ""
 
 
 def _chat_completion_to_responses(chat: dict) -> dict:
@@ -521,6 +561,9 @@ def _format_request_metadata(
     image_count = len(extract_image_urls(req.messages))
     if image_count:
         items.append(("images", str(image_count)))
+    file_count = len(extract_file_inputs(req.messages))
+    if file_count:
+        items.append(("files", str(file_count)))
 
     extra = getattr(req, "model_extra", None) or {}
     extra_items: list[tuple[str, str]] = []
@@ -1199,6 +1242,54 @@ async def debug_config(authorization: str | None = Header(default=None)):
     }
 
 
+@app.post("/v1/embeddings")
+@app.post("/embeddings")
+async def embeddings(
+    req: EmbeddingsRequest,
+    authorization: str | None = Header(default=None),
+):
+    _check_auth(authorization)
+
+    if not isinstance(req.model, str) or not req.model.strip():
+        return _openai_error("Missing model for embeddings request", status_code=422)
+    if req.input is None:
+        return _openai_error("Missing input for embeddings request", status_code=422)
+
+    api_key = _resolve_openai_embeddings_api_key()
+    if not api_key:
+        return _openai_error(
+            "Embeddings are not configured. Set OPENAI_API_KEY or provide OPENAI_API_KEY in ~/.codex/auth.json.",
+            status_code=501,
+        )
+
+    client = await get_async_client("openai-embeddings")
+    try:
+        resp = await request_json_with_retries(
+            client=client,
+            method="POST",
+            url=_resolve_openai_base_url() + "/embeddings",
+            timeout_s=settings.timeout_seconds,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=req.model_dump(exclude_none=True),
+        )
+    except Exception as e:
+        return _openai_error(f"Embeddings upstream request failed: {e}", status_code=502)
+
+    body, text = _response_json_or_text(resp)
+    if resp.status_code >= 400:
+        if isinstance(body, dict):
+            return JSONResponse(status_code=resp.status_code, content=body)
+        message = text or f"Embeddings upstream request failed with status {resp.status_code}"
+        return _openai_error(message, status_code=resp.status_code)
+
+    if body is None:
+        return _openai_error("Embeddings upstream returned a non-JSON response", status_code=502)
+    return JSONResponse(status_code=resp.status_code, content=body)
+
+
 @app.post("/v1/responses")
 @app.post("/responses")
 async def responses(
@@ -1301,6 +1392,7 @@ async def chat_completions(
     t0 = time.time()
 
     image_urls = extract_image_urls(req.messages)
+    file_inputs = extract_file_inputs(req.messages)
     use_claude_oauth = bool(provider == "claude" and settings.claude_use_oauth_api)
     use_gemini_cloudcode = bool(provider == "gemini" and settings.gemini_use_cloudcode_api)
     use_codex_backend = bool(
@@ -1308,6 +1400,7 @@ async def chat_completions(
         and (
             settings.use_codex_responses_api
             or (settings.enable_image_input and image_urls)
+            or bool(file_inputs)
             # Prefer Codex backend `/responses` for streaming requests (true SSE deltas).
             or req.stream
         )
@@ -2325,7 +2418,7 @@ async def chat_completions(
         raise
     except Exception as e:
         upstream = _extract_upstream_status_code(e)
-        status = upstream or 500
+        status = upstream or (400 if isinstance(e, RequestInputError) else 500)
         error_msg = str(e)
         logger.error("[%s] error status=%d %s", resp_id, status, _truncate_for_log(error_msg))
         _active_requests -= 1

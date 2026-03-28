@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import mimetypes
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -12,7 +14,7 @@ import httpx
 
 from .config import settings
 from .http_client import get_async_client, request_json_with_retries
-from .openai_compat import ChatCompletionRequest, ChatMessage, normalize_message_content
+from .openai_compat import ChatCompletionRequest, ChatMessage, RequestInputError, normalize_message_content
 
 _ANTHROPIC_VERSION = "2023-06-01"
 _DEFAULT_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -188,6 +190,42 @@ def _parse_data_url(data_url: str) -> tuple[str, str] | None:
     return mime, b64
 
 
+def _guess_mime_type(filename: str | None) -> str:
+    mime, _ = mimetypes.guess_type((filename or "").strip())
+    return mime or "application/octet-stream"
+
+
+def _parse_openai_file_source(source: dict[str, Any]) -> tuple[str, str, str | None] | None:
+    file_id = source.get("file_id")
+    if isinstance(file_id, str) and file_id.strip():
+        raise RequestInputError("Claude OAuth does not support OpenAI file_id passthrough; send inline file_data instead")
+
+    file_url = source.get("file_url")
+    if isinstance(file_url, str) and file_url.strip():
+        raise RequestInputError("Claude OAuth does not support file_url inputs; send inline file_data instead")
+
+    file_data = source.get("file_data")
+    if not isinstance(file_data, str) or not file_data.strip():
+        return None
+
+    filename = source.get("filename")
+    clean_name = filename.strip() if isinstance(filename, str) and filename.strip() else None
+    raw = file_data.strip()
+    if raw.startswith("data:"):
+        parsed = _parse_data_url(raw)
+        if not parsed:
+            raise RequestInputError("Invalid file_data data URL")
+        mime, b64 = parsed
+        return mime, "".join(b64.split()), clean_name
+
+    b64 = "".join(raw.split())
+    try:
+        base64.b64decode(b64, validate=False)
+    except Exception as e:
+        raise RequestInputError("Invalid file_data base64 payload") from e
+    return _guess_mime_type(clean_name), b64, clean_name
+
+
 def _content_to_anthropic_blocks(content: object) -> list[dict[str, Any]]:
     if isinstance(content, str):
         text = content.strip()
@@ -224,6 +262,23 @@ def _content_to_anthropic_blocks(content: object) -> list[dict[str, Any]]:
                     "source": {"type": "base64", "media_type": mime, "data": b64},
                 }
             )
+        elif t in {"file", "input_file"}:
+            source = item.get("file") if t == "file" else item
+            if not isinstance(source, dict):
+                continue
+            parsed = _parse_openai_file_source(source)
+            if not parsed:
+                continue
+            mime, b64, filename = parsed
+            if mime != "application/pdf":
+                raise RequestInputError(f"Claude OAuth only supports inline PDF file_data today (got {mime})")
+            block: dict[str, Any] = {
+                "type": "document",
+                "source": {"type": "base64", "media_type": mime, "data": b64},
+            }
+            if filename:
+                block["title"] = filename
+            blocks.append(block)
     return blocks
 
 

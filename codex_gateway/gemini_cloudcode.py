@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -14,7 +15,7 @@ from typing import Any
 
 from .config import settings
 from .http_client import get_async_client, request_json_with_retries
-from .openai_compat import ChatCompletionRequest, ChatMessage, normalize_message_content
+from .openai_compat import ChatCompletionRequest, ChatMessage, RequestInputError, normalize_message_content
 
 
 @dataclass(frozen=True)
@@ -419,6 +420,53 @@ def _decode_data_url(url: str) -> tuple[bytes, str]:
     return data, mime
 
 
+def _guess_mime_type(filename: str | None) -> str:
+    mime, _ = mimetypes.guess_type((filename or "").strip())
+    return mime or "application/octet-stream"
+
+
+def _openai_file_to_inline_data(part: dict[str, Any]) -> dict[str, str] | None:
+    ptype = part.get("type")
+    if ptype == "file":
+        source = part.get("file")
+        if not isinstance(source, dict):
+            return None
+    elif ptype == "input_file":
+        source = part
+    else:
+        return None
+
+    file_id = source.get("file_id")
+    if isinstance(file_id, str) and file_id.strip():
+        raise RequestInputError("Gemini CloudCode does not support OpenAI file_id passthrough; send inline file_data instead")
+
+    file_url = source.get("file_url")
+    if isinstance(file_url, str) and file_url.strip():
+        raise RequestInputError("Gemini CloudCode does not support file_url inputs; send inline file_data instead")
+
+    file_data = source.get("file_data")
+    if not isinstance(file_data, str) or not file_data.strip():
+        return None
+
+    raw = file_data.strip()
+    if raw.startswith("data:"):
+        data, mime = _decode_data_url(raw)
+        return {
+            "mime_type": mime,
+            "data": base64.b64encode(data).decode("ascii"),
+        }
+
+    b64 = "".join(raw.split())
+    try:
+        base64.b64decode(b64, validate=False)
+    except Exception as e:
+        raise RequestInputError("Invalid file_data base64 payload") from e
+
+    filename = source.get("filename")
+    clean_name = filename.strip() if isinstance(filename, str) and filename.strip() else None
+    return {"mime_type": _guess_mime_type(clean_name), "data": b64}
+
+
 def _openai_tools_to_gemini(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     declarations: list[dict[str, Any]] = []
     for tool in tools:
@@ -580,6 +628,11 @@ def _messages_to_cloudcode_payload(
                         }
                     }
                 )
+                continue
+            if ptype in {"file", "input_file"}:
+                inline_data = _openai_file_to_inline_data(part)
+                if inline_data is not None:
+                    node["parts"].append({"inlineData": inline_data})
                 continue
         if m.role == "assistant" and isinstance(tool_calls, list):
             for call in tool_calls:
