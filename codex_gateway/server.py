@@ -71,6 +71,13 @@ from .stream_json_cli import (
 app = FastAPI(title="agent-cli-to-api", version="0.1.0")
 logger = logging.getLogger("uvicorn.error")
 
+# Ensure logger always outputs to stderr (uvicorn may not configure handlers in non-TTY / launchd).
+if not logger.handlers:
+    _stderr_handler = logging.StreamHandler(sys.stderr)
+    _stderr_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    logger.addHandler(_stderr_handler)
+    logger.setLevel(logging.DEBUG)
+
 if settings.cors_origins.strip():
     origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     if origins:
