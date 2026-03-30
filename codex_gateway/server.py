@@ -83,6 +83,22 @@ if settings.cors_origins.strip():
         )
 
 
+if settings.debug_log:
+    @app.middleware("http")
+    async def _log_requests(request: Request, call_next):
+        start = time.time()
+        response = await call_next(request)
+        duration = (time.time() - start) * 1000
+        logger.info(
+            "%s %s %s %.0fms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration,
+        )
+        return response
+
+
 _semaphore = None
 _active_requests = 0  # Track current concurrent requests
 
