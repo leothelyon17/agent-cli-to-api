@@ -78,6 +78,18 @@ if not logger.handlers:
     logger.addHandler(_stderr_handler)
     logger.setLevel(logging.DEBUG)
 
+
+def _get_rich_console():
+    """Get or create a shared Rich Console that always outputs color, even in non-TTY (launchd)."""
+    global _RICH_CONSOLE
+    if _RICH_CONSOLE is None:
+        try:
+            from rich.console import Console
+            _RICH_CONSOLE = Console(stderr=True, force_terminal=True)
+        except Exception:
+            return None
+    return _RICH_CONSOLE
+
 if settings.cors_origins.strip():
     origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     if origins:
@@ -746,12 +758,16 @@ def _maybe_print_stats() -> None:
         )
         return
     
-    global _RICH_CONSOLE
-    if _RICH_CONSOLE is None:
-        _RICH_CONSOLE = Console(stderr=True)
-    
-    console: Console = _RICH_CONSOLE  # type: ignore[assignment]
-    
+    console = _get_rich_console()
+    if console is None:
+        logger.info(
+            "📊 Stats (last %ds): requests=%d success=%d failed=%d avg_ms=%.0f tokens=%d",
+            int(elapsed), stats.total_requests, stats.successful_requests,
+            stats.failed_requests, stats.avg_duration_ms(),
+            stats.total_prompt_tokens + stats.total_completion_tokens
+        )
+        return
+
     table = Table(title=f"📊 Stats Summary (last {int(elapsed)}s)", border_style="dim")
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="green", justify="right")
@@ -784,19 +800,15 @@ def _maybe_print_markdown(
     if not text:
         return False
     try:
-        from rich.console import Console
         from rich.markdown import Markdown
         from rich.panel import Panel
         from rich.text import Text
     except Exception:
         return False
 
-    global _RICH_CONSOLE
-    if _RICH_CONSOLE is None:
-        # stderr matches uvicorn's default logging stream.
-        _RICH_CONSOLE = Console(stderr=True)
-
-    console: Console = _RICH_CONSOLE  # type: ignore[assignment]
+    console = _get_rich_console()
+    if console is None:
+        return False
     # For Panel display, use a much larger limit or no limit
     # Rich Panel can handle long text gracefully
     panel_limit = max(settings.log_max_chars * 10, 50000)  # 10x default or 50k
@@ -847,17 +859,14 @@ def _print_qa_together(
     if not question and not answer:
         return False
     try:
-        from rich.console import Console
         from rich.markdown import Markdown
         from rich.panel import Panel
     except Exception:
         return False
 
-    global _RICH_CONSOLE
-    if _RICH_CONSOLE is None:
-        _RICH_CONSOLE = Console(stderr=True)
-
-    console: Console = _RICH_CONSOLE  # type: ignore[assignment]
+    console = _get_rich_console()
+    if console is None:
+        return False
     short = _short_id(resp_id)
     panel_limit = max(settings.log_max_chars * 10, 50000)
     
@@ -891,17 +900,14 @@ def _print_qa_together(
 def _print_error_panel(resp_id: str, error_msg: str, status_code: int = 500) -> None:
     """Print error in a red panel for visibility."""
     try:
-        from rich.console import Console
         from rich.panel import Panel
         from rich.text import Text
     except Exception:
         return
-    
-    global _RICH_CONSOLE
-    if _RICH_CONSOLE is None:
-        _RICH_CONSOLE = Console(stderr=True)
-    
-    console: Console = _RICH_CONSOLE  # type: ignore[assignment]
+
+    console = _get_rich_console()
+    if console is None:
+        return
     short = _short_id(resp_id)
     
     console.print(Panel(
@@ -915,16 +921,13 @@ def _print_error_panel(resp_id: str, error_msg: str, status_code: int = 500) -> 
 def _print_separator(resp_id: str, label: str = "REQUEST", *, model: str | None = None) -> None:
     """Print a visual separator for new requests."""
     try:
-        from rich.console import Console
         from rich.rule import Rule
     except Exception:
         return
-    
-    global _RICH_CONSOLE
-    if _RICH_CONSOLE is None:
-        _RICH_CONSOLE = Console(stderr=True)
-    
-    console: Console = _RICH_CONSOLE  # type: ignore[assignment]
+
+    console = _get_rich_console()
+    if console is None:
+        return
     short = _short_id(resp_id)
     active = _get_active_requests()
     
@@ -1113,15 +1116,12 @@ async def _log_startup_config() -> None:
     
     # Try rich table first
     try:
-        from rich.console import Console
         from rich.table import Table
         from rich.panel import Panel
-        
-        global _RICH_CONSOLE
-        if _RICH_CONSOLE is None:
-            _RICH_CONSOLE = Console(stderr=True)
-        
-        console: Console = _RICH_CONSOLE  # type: ignore[assignment]
+
+        console = _get_rich_console()
+        if console is None:
+            raise ImportError("no console")
         
         table = Table(show_header=False, box=None, padding=(0, 2))
         table.add_column("Key", style="dim")
