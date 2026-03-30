@@ -89,12 +89,10 @@ if settings.debug_log:
         start = time.time()
         response = await call_next(request)
         duration = (time.time() - start) * 1000
-        logger.info(
-            "%s %s %s %.0fms",
-            request.method,
-            request.url.path,
-            response.status_code,
-            duration,
+        print(
+            f"[request] {request.method} {request.url.path} {response.status_code} {duration:.0f}ms",
+            file=sys.stderr,
+            flush=True,
         )
         return response
 
