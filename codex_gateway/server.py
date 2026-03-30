@@ -85,16 +85,17 @@ def _get_rich_console():
     if _RICH_CONSOLE is None:
         try:
             from rich.console import Console
-            import os as _os
-            # In a real TTY: auto-detect. In non-TTY (launchd log file):
-            # use COLUMNS env if set, otherwise 200 so panels are wide enough
-            # for any terminal that later reads the log via `tail -f`.
-            w = int(_os.environ.get("COLUMNS", 0)) or None
+            import sys as _sys
+            _is_real_tty = _sys.stderr.isatty()
+            # Real TTY: auto-detect width. Non-TTY (launchd log file):
+            # force colors but don't set width — we'll avoid fixed-width
+            # panels and use flowing colored text instead.
             _RICH_CONSOLE = Console(
                 stderr=True,
                 force_terminal=True,
-                width=w or 200,
+                **({}  if _is_real_tty else {"no_color": False}),
             )
+            _RICH_CONSOLE._is_real_tty = _is_real_tty  # stash for format decisions
         except Exception:
             return None
     return _RICH_CONSOLE
@@ -808,31 +809,23 @@ def _maybe_print_markdown(
         return False
     if not text:
         return False
-    try:
-        from rich.markdown import Markdown
-        from rich.panel import Panel
-        from rich.text import Text
-    except Exception:
-        return False
 
     console = _get_rich_console()
     if console is None:
         return False
-    # For Panel display, use a much larger limit or no limit
-    # Rich Panel can handle long text gracefully
-    panel_limit = max(settings.log_max_chars * 10, 50000)  # 10x default or 50k
+
+    panel_limit = max(settings.log_max_chars * 10, 50000)
     if len(text) > panel_limit:
         payload = f"{text[:panel_limit]}\n\n... (truncated, {len(text):,} chars total)"
     else:
         payload = text
     payload = payload.rstrip("\n")
     short = _short_id(resp_id)
-    
-    # Use different styles for Q vs A
+
+    # Determine style and title per label
     if label == "Q":
         style = "cyan"
-        char_count = len(text)
-        title = f"📝 Question [{short}] 📏 {char_count:,} chars"
+        title = f"📝 Question [{short}] 📏 {len(text):,} chars"
     elif label == "A":
         style = "green"
         parts = [f"✅ Answer [{short}]"]
@@ -843,11 +836,44 @@ def _maybe_print_markdown(
             if total > 0:
                 parts.append(f"🔢 {total:,} tokens")
         title = " ".join(parts)
+    elif label == "PROMPT":
+        style = "magenta"
+        title = f"💬 Prompt [{short}]"
+    elif label == "RESPONSE":
+        style = "green"
+        parts = [f"✅ Response [{short}]"]
+        if duration_ms:
+            parts.append(f"⏱️ {duration_ms/1000:.1f}s")
+        if usage:
+            total = usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
+            if total > 0:
+                parts.append(f"🔢 {total:,} tokens")
+        title = " ".join(parts)
+    elif label == "CURL":
+        style = "yellow"
+        title = f"🔗 Curl [{short}]"
+    elif label == "REQUEST PARAMS":
+        style = "blue"
+        title = f"📋 Request Params [{short}]"
     else:
         style = "blue"
         title = f"[{short}] {label}"
-    
-    console.print(Panel(Markdown(payload), title=title, border_style=style, expand=False))
+
+    is_tty = getattr(console, "_is_real_tty", True)
+
+    if is_tty:
+        # Real TTY: use rich panels with auto-detected width
+        try:
+            from rich.markdown import Markdown
+            from rich.panel import Panel
+            console.print(Panel(Markdown(payload), title=title, border_style=style, expand=False))
+        except Exception:
+            console.print(f"[bold {style}]━━━ {title} ━━━[/]\n{payload}\n")
+    else:
+        # Non-TTY (log file): use flowing colored text — no fixed-width boxes
+        console.print(f"\n[bold {style}]━━━ {title} ━━━[/bold {style}]", soft_wrap=True)
+        console.print(f"[{style}]{payload}[/{style}]", soft_wrap=True, highlight=False)
+        console.print(f"[dim {style}]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/dim {style}]\n", soft_wrap=True)
     return True
 
 
@@ -902,53 +928,82 @@ def _print_qa_together(
             title_parts.append(f"🔢 {total:,} tokens")
     title = " ".join(title_parts)
     
-    console.print(Panel(Markdown(combined), title=title, border_style="blue", expand=False))
+    is_tty = getattr(console, "_is_real_tty", True)
+    if is_tty:
+        try:
+            from rich.markdown import Markdown
+            from rich.panel import Panel
+            console.print(Panel(Markdown(combined), title=title, border_style="blue", expand=False))
+        except Exception:
+            console.print(f"[bold blue]━━━ {title} ━━━[/]\n{combined}\n")
+    else:
+        if question:
+            console.print(f"\n[bold cyan]━━━ 📝 Question [{short}] ({len(question):,} chars) ━━━[/bold cyan]", soft_wrap=True)
+            console.print(f"[cyan]{question.rstrip()}[/cyan]", soft_wrap=True, highlight=False)
+        if answer:
+            parts = [f"✅ Answer [{short}]"]
+            if duration_ms:
+                parts.append(f"⏱️ {duration_ms/1000:.1f}s")
+            if usage:
+                total = usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
+                if total > 0:
+                    parts.append(f"🔢 {total:,} tokens")
+            console.print(f"[bold green]━━━ {' '.join(parts)} ━━━[/bold green]", soft_wrap=True)
+            console.print(f"[green]{answer.rstrip()}[/green]", soft_wrap=True, highlight=False)
+        console.print(f"[dim blue]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/dim blue]\n", soft_wrap=True)
     return True
 
 
 def _print_error_panel(resp_id: str, error_msg: str, status_code: int = 500) -> None:
     """Print error in a red panel for visibility."""
-    try:
-        from rich.panel import Panel
-        from rich.text import Text
-    except Exception:
-        return
-
     console = _get_rich_console()
     if console is None:
         return
     short = _short_id(resp_id)
-    
-    console.print(Panel(
-        Text(error_msg, style="bold white"),
-        title=f"❌ Error [{short}] HTTP {status_code}",
-        border_style="red",
-        expand=False
-    ))
+    is_tty = getattr(console, "_is_real_tty", True)
+
+    if is_tty:
+        try:
+            from rich.panel import Panel
+            from rich.text import Text
+            console.print(Panel(
+                Text(error_msg, style="bold white"),
+                title=f"❌ Error [{short}] HTTP {status_code}",
+                border_style="red",
+                expand=False,
+            ))
+        except Exception:
+            console.print(f"[bold red]━━━ ❌ Error [{short}] HTTP {status_code} ━━━[/]\n[red]{error_msg}[/red]\n")
+    else:
+        console.print(f"\n[bold red]━━━ ❌ Error [{short}] HTTP {status_code} ━━━[/bold red]", soft_wrap=True)
+        console.print(f"[red]{error_msg}[/red]", soft_wrap=True)
+        console.print(f"[dim red]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/dim red]\n", soft_wrap=True)
 
 
 def _print_separator(resp_id: str, label: str = "REQUEST", *, model: str | None = None) -> None:
     """Print a visual separator for new requests."""
-    try:
-        from rich.rule import Rule
-    except Exception:
-        return
-
     console = _get_rich_console()
     if console is None:
         return
     short = _short_id(resp_id)
     active = _get_active_requests()
-    
-    # Build label with context
+
     parts = [f"🔷 {label}"]
     if model:
-        parts.append(f"model={model}")
+        parts.append(f"[yellow]model[/yellow]=[magenta]{model}[/magenta]")
     parts.append(f"[{short}]")
     if active > 1:
         parts.append(f"📥 {active} concurrent")
-    
-    console.print(Rule(" ".join(parts), style="bold blue"))
+
+    is_tty = getattr(console, "_is_real_tty", True)
+    if is_tty:
+        try:
+            from rich.rule import Rule
+            console.print(Rule(" ".join(parts), style="bold blue"))
+        except Exception:
+            console.print(f"\n[bold blue]{'━' * 20} {' '.join(parts)} {'━' * 20}[/bold blue]")
+    else:
+        console.print(f"\n[bold blue]{'━' * 20} {' '.join(parts)} {'━' * 20}[/bold blue]", soft_wrap=True)
 
 
 _AUTOMATION_GUARD = """SYSTEM: IMPORTANT (Open-AutoGLM action mode)
@@ -1123,35 +1178,37 @@ async def _log_startup_config() -> None:
             ("model", settings.default_model, "yellow"),
         ])
     
-    # Try rich table first
-    try:
-        from rich.table import Table
-        from rich.panel import Panel
-
-        console = _get_rich_console()
-        if console is None:
-            raise ImportError("no console")
-        
-        table = Table(show_header=False, box=None, padding=(0, 2))
-        table.add_column("Key", style="dim")
-        table.add_column("Value")
-        
-        for key, value, style in items:
-            table.add_row(key, f"[{style}]{value}[/{style}]")
-        
-        # Provider-specific emoji
+    # Try rich output
+    console = _get_rich_console()
+    if console is not None:
         emoji = {"codex": "🤖", "cursor-agent": "🖱️", "claude": "🧠", "gemini": "✨"}.get(provider, "🚀")
-        
-        console.print(Panel(
-            table,
-            title=f"{emoji} Agent CLI Gateway [{provider}]",
-            subtitle=f"📍 http://{settings.host}:{settings.port}",
-            border_style="green",
-            expand=False,
-        ))
+        is_tty = getattr(console, "_is_real_tty", True)
+        if is_tty:
+            try:
+                from rich.table import Table
+                from rich.panel import Panel
+                table = Table(show_header=False, box=None, padding=(0, 2))
+                table.add_column("Key", style="dim")
+                table.add_column("Value")
+                for key, value, style in items:
+                    table.add_row(key, f"[{style}]{value}[/{style}]")
+                console.print(Panel(
+                    table,
+                    title=f"{emoji} Agent CLI Gateway [{provider}]",
+                    subtitle=f"📍 http://{settings.host}:{settings.port}",
+                    border_style="green",
+                    expand=False,
+                ))
+                return
+            except Exception:
+                pass
+        # Non-TTY or Panel failed: flowing colored text
+        console.print(f"\n[bold green]━━━ {emoji} Agent CLI Gateway [{provider}] ━━━[/bold green]", soft_wrap=True)
+        for key, value, style in items:
+            console.print(f"  [dim]{key:<18}[/dim] [{style}]{value}[/{style}]", soft_wrap=True)
+        console.print(f"  [bold green]📍 http://{settings.host}:{settings.port}[/bold green]", soft_wrap=True)
+        console.print(f"[dim green]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/dim green]\n", soft_wrap=True)
         return
-    except Exception:
-        pass
     
     # Fallback to plain logging
     plain_items = [(k, v) for k, v, _ in items]
