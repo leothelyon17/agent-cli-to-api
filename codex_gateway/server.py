@@ -18,7 +18,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .codex_cli import collect_codex_text_and_usage_from_events, iter_codex_events
 from .codex_responses import (
@@ -1152,6 +1152,12 @@ async def _warmup_caches() -> None:
 @app.on_event("shutdown")
 async def _shutdown() -> None:
     await _aclose_http_clients()
+
+
+@app.get("/", include_in_schema=False)
+async def index():
+    static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+    return FileResponse(os.path.join(static_dir, "index.html"), media_type="text/html")
 
 
 @app.get("/healthz")
