@@ -463,13 +463,13 @@ class Settings:
     # - summary: one line per request/response
     # - qa: include last USER message + assistant output
     # - full: include full prompt text + full assistant output
-    log_mode: str = _env_str("CODEX_LOG_MODE", "").strip().lower()
-    debug_log: bool = _env_bool("CODEX_DEBUG_LOG", False)
+    log_mode: str = _env_str("CODEX_LOG_MODE", "full").strip().lower()
+    debug_log: bool = _env_bool("CODEX_DEBUG_LOG", True)
     log_events: bool = _env_bool("CODEX_LOG_EVENTS", True)
     log_max_chars: int = _env_int("CODEX_LOG_MAX_CHARS", 4000)
-    rich_logs: bool = _env_bool("CODEX_RICH_LOGS", False)
-    log_render_markdown: bool = _env_bool("CODEX_LOG_RENDER_MARKDOWN", False)
-    log_request_curl: bool = _env_bool("CODEX_LOG_REQUEST_CURL", False)
+    rich_logs: bool = _env_bool("CODEX_RICH_LOGS", True)
+    log_render_markdown: bool = _env_bool("CODEX_LOG_RENDER_MARKDOWN", True)
+    log_request_curl: bool = _env_bool("CODEX_LOG_REQUEST_CURL", True)
     log_stream_deltas: bool = _env_bool("CODEX_LOG_STREAM_DELTAS", False)
     log_stream_inline: bool = _env_bool("CODEX_LOG_STREAM_INLINE", False)
     log_stream_inline_suppress_final: bool = _env_bool("CODEX_LOG_STREAM_INLINE_SUPPRESS_FINAL", True)
