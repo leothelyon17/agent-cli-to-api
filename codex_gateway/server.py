@@ -85,7 +85,7 @@ def _get_rich_console():
     if _RICH_CONSOLE is None:
         try:
             from rich.console import Console
-            _RICH_CONSOLE = Console(stderr=True, force_terminal=True)
+            _RICH_CONSOLE = Console(stderr=True, force_terminal=True, width=120)
         except Exception:
             return None
     return _RICH_CONSOLE
