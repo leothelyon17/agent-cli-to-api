@@ -85,7 +85,16 @@ def _get_rich_console():
     if _RICH_CONSOLE is None:
         try:
             from rich.console import Console
-            _RICH_CONSOLE = Console(stderr=True, force_terminal=True, width=120)
+            import os as _os
+            # In a real TTY: auto-detect. In non-TTY (launchd log file):
+            # use COLUMNS env if set, otherwise 200 so panels are wide enough
+            # for any terminal that later reads the log via `tail -f`.
+            w = int(_os.environ.get("COLUMNS", 0)) or None
+            _RICH_CONSOLE = Console(
+                stderr=True,
+                force_terminal=True,
+                width=w or 200,
+            )
         except Exception:
             return None
     return _RICH_CONSOLE
