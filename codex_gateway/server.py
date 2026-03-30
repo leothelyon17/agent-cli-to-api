@@ -83,18 +83,17 @@ if settings.cors_origins.strip():
         )
 
 
-if settings.debug_log:
-    @app.middleware("http")
-    async def _log_requests(request: Request, call_next):
-        start = time.time()
-        response = await call_next(request)
-        duration = (time.time() - start) * 1000
-        print(
-            f"[request] {request.method} {request.url.path} {response.status_code} {duration:.0f}ms",
-            file=sys.stderr,
-            flush=True,
-        )
-        return response
+@app.middleware("http")
+async def _log_requests(request: Request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    duration = (time.time() - start) * 1000
+    print(
+        f"[request] {request.method} {request.url.path} {response.status_code} {duration:.0f}ms",
+        file=sys.stderr,
+        flush=True,
+    )
+    return response
 
 
 _semaphore = None
