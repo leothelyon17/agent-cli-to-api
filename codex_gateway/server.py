@@ -981,29 +981,39 @@ def _print_error_panel(resp_id: str, error_msg: str, status_code: int = 500) -> 
 
 
 def _print_separator(resp_id: str, label: str = "REQUEST", *, model: str | None = None) -> None:
-    """Print a visual separator for new requests."""
+    """Print a bold visual separator between requests for easy scanning."""
+    import datetime
     console = _get_rich_console()
     if console is None:
         return
     short = _short_id(resp_id)
     active = _get_active_requests()
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
 
-    parts = [f"🔷 {label}"]
+    info_parts = []
     if model:
-        parts.append(f"[yellow]model[/yellow]=[magenta]{model}[/magenta]")
-    parts.append(f"[{short}]")
+        info_parts.append(f"[yellow]model[/yellow]=[magenta]{model}[/magenta]")
+    info_parts.append(f"[dim]id=[/dim]{short}")
     if active > 1:
-        parts.append(f"📥 {active} concurrent")
+        info_parts.append(f"[red]📥 {active} concurrent[/red]")
+    info_line = "  ".join(info_parts)
 
     is_tty = getattr(console, "_is_real_tty", True)
     if is_tty:
         try:
             from rich.rule import Rule
-            console.print(Rule(" ".join(parts), style="bold blue"))
+            console.print()
+            console.print(Rule(style="bold bright_blue"))
+            console.print(f"  [bold bright_blue]🔷 NEW {label}[/bold bright_blue]  [dim]{ts}[/dim]  {info_line}")
+            console.print(Rule(style="bold bright_blue"))
         except Exception:
-            console.print(f"\n[bold blue]{'━' * 20} {' '.join(parts)} {'━' * 20}[/bold blue]")
+            console.print(f"\n[bold bright_blue]{'━' * 60}[/]")
+            console.print(f"  [bold bright_blue]🔷 NEW {label}[/]  [dim]{ts}[/]  {info_line}")
+            console.print(f"[bold bright_blue]{'━' * 60}[/]\n")
     else:
-        console.print(f"\n[bold blue]{'━' * 20} {' '.join(parts)} {'━' * 20}[/bold blue]", soft_wrap=True)
+        console.print(f"\n\n[bold bright_blue]{'━' * 60}[/bold bright_blue]", soft_wrap=True)
+        console.print(f"  [bold bright_blue]🔷 NEW {label}[/bold bright_blue]  [dim]{ts}[/dim]  {info_line}", soft_wrap=True)
+        console.print(f"[bold bright_blue]{'━' * 60}[/bold bright_blue]\n", soft_wrap=True)
 
 
 _AUTOMATION_GUARD = """SYSTEM: IMPORTANT (Open-AutoGLM action mode)
