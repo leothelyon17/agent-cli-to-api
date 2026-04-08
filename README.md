@@ -178,8 +178,11 @@ For advanced env vars, see `.env.example` and `codex_gateway/config.py`.
 - `GET /v1/models`
 - `POST /v1/embeddings` (proxies to OpenAI embeddings; requires `OPENAI_API_KEY` or `~/.codex/auth.json` with `OPENAI_API_KEY`)
 - `POST /v1/chat/completions` (supports `stream`)
+- `POST /v1/messages` (Anthropic Messages-compatible; supports `stream`)
+- `POST /v1/messages/count_tokens` (Anthropic-compatible; currently heuristic token counting)
 
 Tip: any OpenAI SDK that supports `base_url` should work by pointing it at this server.
+Tip: Claude Code can point `ANTHROPIC_BASE_URL` at this server and use `ANTHROPIC_AUTH_TOKEN` for gateway auth.
 
 Auth note: include `Authorization: Bearer <token>` only when you set `CODEX_GATEWAY_TOKEN` on the gateway.
 
@@ -220,6 +223,37 @@ curl -N http://127.0.0.1:8000/v1/chat/completions \
     "model":"gpt-5-codex",
     "messages":[{"role":"user","content":"用一句话解释这个项目的目的"}],
     "stream": true
+  }'
+```
+
+### Example (Anthropic Messages)
+
+```bash
+curl -s http://127.0.0.1:8000/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer devtoken" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model":"claude-sonnet-4-6",
+    "max_tokens": 256,
+    "messages":[
+      {"role":"user","content":"用一句话解释这个项目的作用"}
+    ]
+  }'
+```
+
+### Example (Anthropic count_tokens)
+
+```bash
+curl -s http://127.0.0.1:8000/v1/messages/count_tokens \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer devtoken" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model":"claude-sonnet-4-6",
+    "messages":[
+      {"role":"user","content":"hello"}
+    ]
   }'
 ```
 

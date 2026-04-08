@@ -21,6 +21,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .codex_cli import collect_codex_text_and_usage_from_events, iter_codex_events
+from .anthropic_compat import (
+    AnthropicCountTokensRequest,
+    AnthropicMessagesRequest,
+    anthropic_messages_to_chat_request,
+    estimate_anthropic_input_tokens,
+    openai_chat_completion_to_anthropic_message,
+    openai_stream_to_anthropic_events,
+)
 from .codex_responses import (
     build_codex_headers,
     collect_codex_responses_text_and_usage,
@@ -298,6 +306,35 @@ def _openai_error(message: str, *, status_code: int = 500) -> JSONResponse:
         }
     ).model_dump()
     return JSONResponse(status_code=status_code, content=payload)
+
+
+def _anthropic_error(message: str, *, status_code: int = 500) -> JSONResponse:
+    error_type = "api_error" if status_code >= 500 else "invalid_request_error"
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "type": "error",
+            "error": {
+                "type": error_type,
+                "message": message,
+            },
+        },
+    )
+
+
+def _extract_error_message(body: object) -> str:
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            return error["message"]
+        if isinstance(error, str):
+            return error
+        detail = body.get("detail")
+        if isinstance(detail, str):
+            return detail
+    if isinstance(body, str):
+        return body
+    return "Request failed"
 
 
 def _resolve_openai_embeddings_api_key() -> str | None:
@@ -1424,6 +1461,71 @@ async def responses(
     if isinstance(result, dict):
         return _chat_completion_to_responses(result)
     return result
+
+
+@app.post("/v1/messages/count_tokens")
+async def anthropic_count_tokens(
+    req: AnthropicCountTokensRequest,
+    authorization: str | None = Header(default=None),
+):
+    _check_auth(authorization)
+    if not req.messages:
+        return _anthropic_error("Missing messages for count_tokens request", status_code=422)
+    return {
+        "input_tokens": estimate_anthropic_input_tokens(req),
+    }
+
+
+@app.post("/v1/messages")
+async def anthropic_messages(
+    req: AnthropicMessagesRequest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    _check_auth(authorization)
+    if not req.messages:
+        return _anthropic_error("Missing messages for messages request", status_code=422)
+
+    chat_req = anthropic_messages_to_chat_request(req)
+    result = await chat_completions(chat_req, request, authorization)
+
+    if isinstance(result, JSONResponse):
+        if result.status_code >= 400:
+            try:
+                body = json.loads(result.body.decode("utf-8"))
+            except Exception:
+                body = result.body.decode("utf-8", errors="ignore")
+            return _anthropic_error(_extract_error_message(body), status_code=result.status_code)
+
+        try:
+            body = json.loads(result.body.decode("utf-8"))
+        except Exception:
+            return _anthropic_error("Gateway returned an invalid JSON response", status_code=502)
+        if not isinstance(body, dict):
+            return _anthropic_error("Gateway returned an invalid response payload", status_code=502)
+        return JSONResponse(
+            status_code=result.status_code,
+            content=openai_chat_completion_to_anthropic_message(body),
+            headers=dict(result.headers),
+        )
+
+    if isinstance(result, StreamingResponse):
+        async def anthropic_sse_gen():
+            async for event in openai_stream_to_anthropic_events(result.body_iterator, model=req.model):
+                yield event
+
+        stream_headers = dict(result.headers)
+        stream_headers.pop("content-length", None)
+        return StreamingResponse(
+            anthropic_sse_gen(),
+            media_type="text/event-stream",
+            headers=stream_headers,
+        )
+
+    if isinstance(result, dict):
+        return openai_chat_completion_to_anthropic_message(result)
+
+    return _anthropic_error("Gateway returned an unsupported response type", status_code=502)
 
 
 @app.post("/v1/chat/completions")
