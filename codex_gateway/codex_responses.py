@@ -463,6 +463,8 @@ def convert_chat_completions_to_codex_responses(
         parallel_tool_calls = extra.get("parallel_tool_calls")
         if parallel_tool_calls is not None:
             out["parallel_tool_calls"] = parallel_tool_calls
+        elif isinstance(tools, list) and tools:
+            out["parallel_tool_calls"] = False
 
     if not allow_tools:
         # For proxying chat completions / UI automation, we generally want pure text output.

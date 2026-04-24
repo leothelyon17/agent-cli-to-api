@@ -11,7 +11,7 @@ _FILE_KEYS = ("file_id", "file_data", "filename", "file_url")
 
 def normalize_cursor_chat_request(req: ChatCompletionRequest) -> ChatCompletionRequest:
     """Normalize Cursor and legacy Chat Completions variants for backend conversion."""
-    messages = [_normalize_message(message) for message in req.messages]
+    messages = _normalize_messages(req.messages)
     extra = dict(getattr(req, "model_extra", None) or {})
 
     tools = extra.get("tools")
@@ -88,7 +88,24 @@ def format_streaming_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[s
     return formatted
 
 
-def _normalize_message(message: ChatMessage) -> ChatMessage:
+def _normalize_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
+    normalized: list[ChatMessage] = []
+    for message in messages:
+        normalized.extend(_normalize_message(message))
+    return normalized
+
+
+def _normalize_message(message: ChatMessage) -> list[ChatMessage]:
+    if message.role == "user":
+        split = _split_anthropic_tool_result_message(message)
+        if split is not None:
+            return split
+    if message.role == "assistant":
+        return [_normalize_assistant_message(message)]
+    return [_normalize_standard_message(message)]
+
+
+def _normalize_standard_message(message: ChatMessage) -> ChatMessage:
     extra = dict(getattr(message, "model_extra", None) or {})
     content = _normalize_content(message.content)
 
@@ -100,6 +117,137 @@ def _normalize_message(message: ChatMessage) -> ChatMessage:
         extra["tool_calls"] = [{"type": "function", "function": call}]
 
     return ChatMessage(role=message.role, content=content, **extra)
+
+
+def _normalize_assistant_message(message: ChatMessage) -> ChatMessage:
+    extra = dict(getattr(message, "model_extra", None) or {})
+    content = message.content
+    block_tool_calls: list[dict[str, Any]] = []
+
+    if isinstance(content, list):
+        content_parts: list[dict[str, Any]] = []
+        saw_tool_use = False
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "tool_use":
+                saw_tool_use = True
+                tool_call = _anthropic_tool_use_to_openai_call(part)
+                if tool_call is not None:
+                    block_tool_calls.append(tool_call)
+                continue
+            content_parts.append(part)
+        if saw_tool_use:
+            content = _normalize_content(content_parts) if content_parts else ""
+
+    normalized = _normalize_standard_message(ChatMessage(role=message.role, content=content, **extra))
+    if block_tool_calls:
+        normalized_extra = dict(getattr(normalized, "model_extra", None) or {})
+        existing = normalized_extra.get("tool_calls")
+        normalized_extra["tool_calls"] = [
+            *(existing if isinstance(existing, list) else []),
+            *block_tool_calls,
+        ]
+        normalized = ChatMessage(role=normalized.role, content=normalized.content, **normalized_extra)
+    return normalized
+
+
+def _split_anthropic_tool_result_message(message: ChatMessage) -> list[ChatMessage] | None:
+    content = message.content
+    if not isinstance(content, list):
+        return None
+
+    out: list[ChatMessage] = []
+    pending_parts: list[dict[str, Any]] = []
+    saw_tool_result = False
+
+    def flush_pending_parts() -> None:
+        nonlocal pending_parts
+        if not pending_parts:
+            return
+        out.append(ChatMessage(role="user", content=_normalize_content(pending_parts)))
+        pending_parts = []
+
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "tool_result":
+            saw_tool_result = True
+            flush_pending_parts()
+            tool_message = _anthropic_tool_result_to_openai_message(part)
+            if tool_message is not None:
+                out.append(tool_message)
+            continue
+        pending_parts.append(part)
+
+    if not saw_tool_result:
+        return None
+
+    flush_pending_parts()
+    return out or [ChatMessage(role="user", content="")]
+
+
+def _anthropic_tool_use_to_openai_call(block: dict[str, Any]) -> dict[str, Any] | None:
+    tool_id = block.get("id") or block.get("tool_call_id") or block.get("call_id")
+    name = block.get("name")
+    if not isinstance(tool_id, str) or not tool_id.strip():
+        return None
+    if not isinstance(name, str) or not name.strip():
+        return None
+
+    arguments = block.get("input")
+    if arguments is None:
+        arguments = block.get("arguments")
+    if not isinstance(arguments, str):
+        try:
+            arguments = json.dumps(arguments or {}, ensure_ascii=False)
+        except Exception:
+            arguments = "{}"
+
+    return {
+        "id": tool_id.strip(),
+        "type": "function",
+        "function": {"name": name.strip(), "arguments": arguments},
+    }
+
+
+def _anthropic_tool_result_to_openai_message(block: dict[str, Any]) -> ChatMessage | None:
+    tool_call_id = block.get("tool_use_id") or block.get("tool_call_id") or block.get("call_id") or block.get("id")
+    if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+        return None
+    return ChatMessage(
+        role="tool",
+        content=_stringify_tool_result_content(block.get("content")),
+        tool_call_id=tool_call_id.strip(),
+    )
+
+
+def _stringify_tool_result_content(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if item.get("type") in {"text", "input_text", "output_text"} and isinstance(text, str):
+                parts.append(text)
+        if parts:
+            return "".join(parts)
+    if isinstance(content, dict):
+        text = content.get("text")
+        if content.get("type") in {"text", "input_text", "output_text"} and isinstance(text, str):
+            return text
+    try:
+        return json.dumps(content, ensure_ascii=False)
+    except Exception:
+        return str(content)
 
 
 def _normalize_content(content: Any) -> Any:

@@ -316,6 +316,52 @@ class CursorCompatTests(unittest.TestCase):
             ],
         )
 
+    def test_anthropic_style_tool_blocks_normalize_to_openai_tool_messages(self) -> None:
+        """Test Cursor tool_use/tool_result content blocks normalize for Chat Completions."""
+        # Arrange
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": "run pwd"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "I will check."},
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_cursor_001",
+                            "name": "Shell",
+                            "input": {"command": "pwd"},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_cursor_001",
+                            "content": [{"type": "text", "text": "/workspace"}],
+                        }
+                    ],
+                },
+            ],
+        }
+
+        # Act
+        req = _normalize_request_payload(payload)
+
+        # Assert
+        self.assertEqual([msg.role for msg in req.messages], ["user", "assistant", "tool"])
+        self.assertEqual(req.messages[1].model_extra["tool_calls"][0]["id"], "toolu_cursor_001")
+        self.assertEqual(req.messages[1].model_extra["tool_calls"][0]["function"]["name"], "Shell")
+        self.assertEqual(
+            req.messages[1].model_extra["tool_calls"][0]["function"]["arguments"],
+            '{"command": "pwd"}',
+        )
+        self.assertEqual(req.messages[2].model_extra["tool_call_id"], "toolu_cursor_001")
+        self.assertEqual(req.messages[2].content, "/workspace")
+
     def test_tool_result_followup_fixture_converts_to_codex_function_output(self) -> None:
         """Test Cursor tool-result follow-ups convert to Codex function call output."""
         # Arrange
@@ -338,6 +384,71 @@ class CursorCompatTests(unittest.TestCase):
             },
             payload["input"],
         )
+
+    def test_anthropic_style_tool_result_converts_to_codex_function_output(self) -> None:
+        """Test Cursor tool_result blocks reach Codex as function_call_output items."""
+        # Arrange
+        req = _normalize_request_payload(
+            {
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_cursor_001",
+                                "content": [{"type": "text", "text": "/workspace"}],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        # Act
+        payload = convert_chat_completions_to_codex_responses(
+            req,
+            model_name="gpt-5.4",
+            force_stream=True,
+            allow_tools=True,
+        )
+
+        # Assert
+        self.assertIn(
+            {"type": "function_call_output", "call_id": "toolu_cursor_001", "output": "/workspace"},
+            payload["input"],
+        )
+
+    def test_codex_tool_payload_defaults_to_sequential_tool_calls(self) -> None:
+        """Test Cursor tool prompts do not fan out parallel Codex calls by default."""
+        # Arrange
+        req = _normalize_request_payload(
+            {
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "run pwd"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "Shell",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
+            }
+        )
+
+        # Act
+        payload = convert_chat_completions_to_codex_responses(
+            req,
+            model_name="gpt-5.4",
+            force_stream=True,
+            allow_tools=True,
+        )
+
+        # Assert
+        self.assertFalse(payload["parallel_tool_calls"])
 
     def test_image_upload_fixture_converts_to_codex_input_image(self) -> None:
         """Test Cursor image fixtures convert to Codex input image parts."""
