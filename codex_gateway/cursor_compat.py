@@ -88,6 +88,23 @@ def format_streaming_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[s
     return formatted
 
 
+def format_streaming_tool_call_start(*, index: int, call_id: str, name: str) -> dict[str, Any]:
+    """Format the first streamed delta for an OpenAI-compatible tool call."""
+    clean_id = call_id.strip() if isinstance(call_id, str) and call_id.strip() else f"call_{index + 1}"
+    clean_name = name.strip() if isinstance(name, str) and name.strip() else "tool"
+    return {
+        "index": index,
+        "id": clean_id,
+        "type": "function",
+        "function": {"name": clean_name, "arguments": ""},
+    }
+
+
+def format_streaming_tool_call_arguments_delta(*, index: int, arguments_delta: str) -> dict[str, Any]:
+    """Format an incremental arguments delta for an OpenAI-compatible tool call."""
+    return {"index": index, "function": {"arguments": arguments_delta}}
+
+
 def _normalize_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
     normalized: list[ChatMessage] = []
     for message in messages:

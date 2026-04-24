@@ -168,6 +168,104 @@ class CursorStreamingTests(unittest.TestCase):
         self.assertEqual(events[1]["choices"][0]["delta"], expected_events[1]["choices"][0]["delta"])
         self.assertEqual(events[2]["choices"][0]["finish_reason"], expected_events[2]["choices"][0]["finish_reason"])
 
+    def test_chat_route_streams_incremental_tool_call_arguments(self) -> None:
+        """Test Codex Responses tool argument deltas stream as OpenAI tool-call chunks."""
+        # Arrange
+        original_load_auth = server.load_codex_auth
+        original_iter_events = server.iter_codex_responses_events
+        original_provider = server.settings.provider
+        original_use_codex_responses_api = server.settings.use_codex_responses_api
+        original_allow_client_model_override = server.settings.allow_client_model_override
+
+        async def fake_iter_codex_responses_events(**_kwargs):
+            yield {
+                "type": "response.output_item.added",
+                "item": {
+                    "id": "fc_001",
+                    "type": "function_call",
+                    "call_id": "call_cursor_001",
+                    "name": "run_terminal_cmd",
+                },
+            }
+            yield {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_001",
+                "delta": '{"command"',
+            }
+            yield {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_001",
+                "delta": ':"pwd"}',
+            }
+            yield {
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "fc_001",
+                    "type": "function_call",
+                    "call_id": "call_cursor_001",
+                    "name": "run_terminal_cmd",
+                    "arguments": '{"command":"pwd"}',
+                },
+            }
+            yield {
+                "type": "response.completed",
+                "response": {"usage": {"input_tokens": 1, "output_tokens": 2}, "output": []},
+            }
+
+        server.load_codex_auth = lambda *, codex_cli_home: CodexAuth(
+            api_key="test-token",
+            access_token=None,
+            refresh_token=None,
+            account_id=None,
+            last_refresh=None,
+        )
+        server.iter_codex_responses_events = fake_iter_codex_responses_events
+        object.__setattr__(server.settings, "provider", "codex")
+        object.__setattr__(server.settings, "use_codex_responses_api", True)
+        object.__setattr__(server.settings, "allow_client_model_override", True)
+
+        try:
+            req = ChatCompletionRequestCompat(**_fixture("tool_prompt_request.json")["request"])
+            authorization = f"Bearer {server.settings.bearer_token}" if server.settings.bearer_token else None
+
+            # Act
+            response = asyncio.run(server.chat_completions(req, _request(), authorization))
+            events = asyncio.run(_collect_sse_json_events(response))
+
+        finally:
+            server.load_codex_auth = original_load_auth
+            server.iter_codex_responses_events = original_iter_events
+            object.__setattr__(server.settings, "provider", original_provider)
+            object.__setattr__(server.settings, "use_codex_responses_api", original_use_codex_responses_api)
+            object.__setattr__(
+                server.settings,
+                "allow_client_model_override",
+                original_allow_client_model_override,
+            )
+
+        # Assert
+        self.assertEqual(events[0]["choices"][0]["delta"], {"role": "assistant"})
+        self.assertEqual(
+            events[1]["choices"][0]["delta"]["tool_calls"][0],
+            {
+                "index": 0,
+                "id": "call_cursor_001",
+                "type": "function",
+                "function": {"name": "run_terminal_cmd", "arguments": ""},
+            },
+        )
+        self.assertEqual(
+            events[2]["choices"][0]["delta"]["tool_calls"][0],
+            {"index": 0, "function": {"arguments": '{"command"'}},
+        )
+        self.assertEqual(
+            events[3]["choices"][0]["delta"]["tool_calls"][0],
+            {"index": 0, "function": {"arguments": ':"pwd"}'}},
+        )
+        self.assertEqual(events[4]["choices"][0]["delta"], {})
+        self.assertEqual(events[4]["choices"][0]["finish_reason"], "tool_calls")
+        self.assertEqual(events[5], "[DONE]")
+
 
 if __name__ == "__main__":
     unittest.main()

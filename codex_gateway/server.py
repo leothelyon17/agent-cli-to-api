@@ -41,7 +41,12 @@ from .codex_responses import (
     maybe_refresh_codex_auth,
     warmup_codex_auth,
 )
-from .cursor_compat import format_streaming_tool_calls, normalize_cursor_chat_request
+from .cursor_compat import (
+    format_streaming_tool_call_arguments_delta,
+    format_streaming_tool_call_start,
+    format_streaming_tool_calls,
+    normalize_cursor_chat_request,
+)
 from .config import settings
 from .claude_oauth import generate_oauth as claude_oauth_generate
 from .claude_oauth import iter_oauth_stream_events as iter_claude_oauth_events
@@ -296,6 +301,70 @@ def _check_auth(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="Missing Authorization: Bearer <token>")
     if authorization.removeprefix("Bearer ").strip() != token:
         raise HTTPException(status_code=403, detail="Invalid token")
+
+
+def _is_codex_function_call_item(item: dict) -> bool:
+    item_type = item.get("type")
+    if item_type in {"function_call", "tool_call"}:
+        return True
+    return isinstance(item.get("call_id"), str) and isinstance(item.get("name"), str)
+
+
+def _codex_tool_item_key(evt: dict, item: dict) -> str | None:
+    for value in (
+        evt.get("item_id"),
+        evt.get("output_item_id"),
+        item.get("id"),
+        item.get("call_id"),
+        item.get("tool_call_id"),
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _codex_tool_delta_key(evt: dict, known_keys: set[str]) -> str | None:
+    for key in ("item_id", "output_item_id", "id", "call_id", "tool_call_id"):
+        value = evt.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    if len(known_keys) == 1:
+        return next(iter(known_keys))
+    return None
+
+
+def _codex_tool_item_name(item: dict) -> str:
+    func = item.get("function")
+    if isinstance(func, dict) and isinstance(func.get("name"), str) and func["name"].strip():
+        return func["name"].strip()
+    name = item.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return "tool"
+
+
+def _codex_tool_call_id(item: dict, *, index: int) -> str:
+    for key in ("call_id", "id", "tool_call_id"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return f"call_{index + 1}"
+
+
+def _unstreamed_tool_calls(
+    tool_calls: list[dict[str, object]],
+    streamed_tool_call_ids: set[str],
+) -> list[dict[str, object]]:
+    if not streamed_tool_call_ids:
+        return tool_calls
+
+    out: list[dict[str, object]] = []
+    for call in tool_calls:
+        call_id = call.get("id") or call.get("call_id") or call.get("tool_call_id")
+        if isinstance(call_id, str) and call_id.strip() in streamed_tool_call_ids:
+            continue
+        out.append(call)
+    return out
 
 
 def _openai_error(message: str, *, status_code: int = 500) -> JSONResponse:
@@ -2268,6 +2337,10 @@ async def chat_completions(
             assembled_text = ""
             stream_usage: dict[str, object] | None = None
             stream_tool_calls: list[dict[str, object]] | None = None
+            streamed_tool_call_seen = False
+            streamed_tool_call_ids: set[str] = set()
+            stream_tool_call_indexes: dict[str, int] = {}
+            next_stream_tool_call_index = 0
             try:
                 async with sem:
                     # initial role chunk
@@ -2550,6 +2623,83 @@ async def chat_completions(
                                 delta = ""
                                 if provider == "codex":
                                     if use_codex_backend:
+                                        if evt.get("type") == "response.output_item.added":
+                                            item = evt.get("item")
+                                            if isinstance(item, dict) and _is_codex_function_call_item(item):
+                                                item_key = _codex_tool_item_key(evt, item)
+                                                if item_key is None:
+                                                    item_key = f"_tool_{next_stream_tool_call_index}"
+
+                                                index = stream_tool_call_indexes.get(item_key)
+                                                if index is None:
+                                                    index = next_stream_tool_call_index
+                                                    next_stream_tool_call_index += 1
+
+                                                call_id = _codex_tool_call_id(item, index=index)
+                                                for key in (item_key, call_id, item.get("id"), item.get("call_id")):
+                                                    if isinstance(key, str) and key.strip():
+                                                        stream_tool_call_indexes[key.strip()] = index
+                                                streamed_tool_call_ids.add(call_id)
+                                                streamed_tool_call_seen = True
+                                                sent_content = True
+                                                chunk = {
+                                                    "id": resp_id,
+                                                    "object": "chat.completion.chunk",
+                                                    "created": created,
+                                                    "model": requested_model,
+                                                    "choices": [
+                                                        {
+                                                            "index": 0,
+                                                            "delta": {
+                                                                "tool_calls": [
+                                                                    format_streaming_tool_call_start(
+                                                                        index=index,
+                                                                        call_id=call_id,
+                                                                        name=_codex_tool_item_name(item),
+                                                                    )
+                                                                ]
+                                                            },
+                                                            "finish_reason": None,
+                                                        }
+                                                    ],
+                                                }
+                                                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                                                continue
+                                        if (
+                                            evt.get("type") == "response.function_call_arguments.delta"
+                                            and isinstance(evt.get("delta"), str)
+                                        ):
+                                            item_key = _codex_tool_delta_key(evt, set(stream_tool_call_indexes))
+                                            index = (
+                                                stream_tool_call_indexes.get(item_key)
+                                                if isinstance(item_key, str)
+                                                else None
+                                            )
+                                            if index is not None:
+                                                streamed_tool_call_seen = True
+                                                sent_content = True
+                                                chunk = {
+                                                    "id": resp_id,
+                                                    "object": "chat.completion.chunk",
+                                                    "created": created,
+                                                    "model": requested_model,
+                                                    "choices": [
+                                                        {
+                                                            "index": 0,
+                                                            "delta": {
+                                                                "tool_calls": [
+                                                                    format_streaming_tool_call_arguments_delta(
+                                                                        index=index,
+                                                                        arguments_delta=evt["delta"],
+                                                                    )
+                                                                ]
+                                                            },
+                                                            "finish_reason": None,
+                                                        }
+                                                    ],
+                                                }
+                                                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                                                continue
                                         if evt.get("type") == "response.output_text.delta" and isinstance(
                                             evt.get("delta"), str
                                         ):
@@ -2582,17 +2732,27 @@ async def chat_completions(
                                             if isinstance(resp, dict):
                                                 parsed_calls = extract_codex_tool_calls(resp)
                                                 if parsed_calls:
-                                                    stream_tool_calls = parsed_calls
+                                                    unstreamed = _unstreamed_tool_calls(
+                                                        parsed_calls,
+                                                        streamed_tool_call_ids,
+                                                    )
+                                                    if unstreamed:
+                                                        stream_tool_calls = unstreamed
                                             break
                                         if evt.get("type") == "response.output_item.done":
                                             item = evt.get("item")
                                             if isinstance(item, dict):
                                                 parsed_calls = extract_codex_tool_calls_from_output_item(item)
                                                 if parsed_calls:
-                                                    stream_tool_calls = [
-                                                        *(stream_tool_calls or []),
-                                                        *parsed_calls,
-                                                    ]
+                                                    unstreamed = _unstreamed_tool_calls(
+                                                        parsed_calls,
+                                                        streamed_tool_call_ids,
+                                                    )
+                                                    if unstreamed:
+                                                        stream_tool_calls = [
+                                                            *(stream_tool_calls or []),
+                                                            *unstreamed,
+                                                        ]
                                     else:
                                         if evt.get("type") == "item.completed":
                                             item = evt.get("item") or {}
@@ -2655,7 +2815,9 @@ async def chat_completions(
                             {
                                 "index": 0,
                                 "delta": {},
-                                "finish_reason": "tool_calls" if stream_tool_calls else "stop",
+                                "finish_reason": "tool_calls"
+                                if (stream_tool_calls or streamed_tool_call_seen)
+                                else "stop",
                             }
                         ],
                     }
