@@ -2341,6 +2341,8 @@ async def chat_completions(
             streamed_tool_call_ids: set[str] = set()
             stream_tool_call_indexes: dict[str, int] = {}
             next_stream_tool_call_index = 0
+            streamed_tool_call_start_count = 0
+            streamed_tool_call_delta_count = 0
             try:
                 async with sem:
                     # initial role chunk
@@ -2641,7 +2643,16 @@ async def chat_completions(
                                                         stream_tool_call_indexes[key.strip()] = index
                                                 streamed_tool_call_ids.add(call_id)
                                                 streamed_tool_call_seen = True
+                                                streamed_tool_call_start_count += 1
                                                 sent_content = True
+                                                if settings.log_events:
+                                                    logger.info(
+                                                        "[%s] stream tool_call.start index=%d id=%s name=%s",
+                                                        resp_id,
+                                                        index,
+                                                        call_id,
+                                                        _codex_tool_item_name(item),
+                                                    )
                                                 chunk = {
                                                     "id": resp_id,
                                                     "object": "chat.completion.chunk",
@@ -2677,7 +2688,15 @@ async def chat_completions(
                                             )
                                             if index is not None:
                                                 streamed_tool_call_seen = True
+                                                streamed_tool_call_delta_count += 1
                                                 sent_content = True
+                                                if settings.log_events:
+                                                    logger.info(
+                                                        "[%s] stream tool_call.arguments.delta index=%d chars=%d",
+                                                        resp_id,
+                                                        index,
+                                                        len(evt["delta"]),
+                                                    )
                                                 chunk = {
                                                     "id": resp_id,
                                                     "object": "chat.completion.chunk",
@@ -2823,6 +2842,12 @@ async def chat_completions(
                     }
                     if stream_tool_calls:
                         streaming_tool_calls = format_streaming_tool_calls(stream_tool_calls)
+                        if settings.log_events:
+                            logger.info(
+                                "[%s] stream tool_call.complete fallback_count=%d",
+                                resp_id,
+                                len(streaming_tool_calls),
+                            )
                         tool_chunk = {
                             "id": resp_id,
                             "object": "chat.completion.chunk",
@@ -2851,6 +2876,16 @@ async def chat_completions(
                 _active_requests -= 1
                 _request_stats.record_success(duration_ms, stream_usage)
                 _maybe_print_stats()
+
+                if streamed_tool_call_seen or stream_tool_calls:
+                    logger.info(
+                        "[%s] stream tool_call summary starts=%d arg_deltas=%d fallback_pending=%d ids=%s",
+                        resp_id,
+                        streamed_tool_call_start_count,
+                        streamed_tool_call_delta_count,
+                        len(stream_tool_calls or []),
+                        ",".join(sorted(streamed_tool_call_ids)) or "-",
+                    )
 
                 suppress_final = settings.log_stream_inline and settings.log_stream_inline_suppress_final
                 if suppress_final:
