@@ -1,0 +1,46 @@
+{
+  "capture": {
+    "source": "sanitized-contract-fixture-based-on-prior-gateway-test",
+    "captured_at": "2026-04-24T00:00:00-04:00",
+    "endpoint": "/v1/chat/completions",
+    "notes": "Representative Cursor Agent-style tool prompt. Authorization header omitted."
+  },
+  "request": {
+    "model": "gpt-4o-mini",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Run a harmless workspace path check."
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "run_terminal_cmd",
+          "description": "Run a terminal command.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "command"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    ],
+    "tool_choice": "auto",
+    "parallel_tool_calls": false,
+    "stream": true
+  },
+  "expected_gateway_contract": {
+    "accepted": true,
+    "codex_allow_tools_required": true,
+    "tool_response_finish_reason": "tool_calls"
+  }
+}

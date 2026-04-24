@@ -1,0 +1,24 @@
+{
+  "capture": {
+    "source": "sanitized-contract-fixture",
+    "captured_at": "2026-04-24T00:00:00-04:00",
+    "endpoint": "/v1/chat/completions",
+    "notes": "Representative Cursor custom OpenAI-compatible text chat request. Authorization header omitted."
+  },
+  "request": {
+    "model": "gpt-4o-mini",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply with a short health check sentence."
+      }
+    ],
+    "stream": true,
+    "temperature": 0
+  },
+  "expected_gateway_contract": {
+    "accepted": true,
+    "response_object": "chat.completion.chunk",
+    "finish_reason": "stop"
+  }
+}

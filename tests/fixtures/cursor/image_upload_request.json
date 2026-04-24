@@ -1,0 +1,35 @@
+{
+  "capture": {
+    "source": "sanitized-contract-fixture",
+    "captured_at": "2026-04-24T00:00:00-04:00",
+    "endpoint": "/v1/chat/completions",
+    "notes": "Synthetic one-pixel PNG data URL. No user image content."
+  },
+  "request": {
+    "model": "gpt-4o-mini",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Describe this synthetic test image in one sentence."
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+            }
+          }
+        ]
+      }
+    ],
+    "stream": false,
+    "max_tokens": 64
+  },
+  "expected_gateway_contract": {
+    "accepted": true,
+    "codex_input_type": "input_image",
+    "raw_image_logging_allowed": false
+  }
+}

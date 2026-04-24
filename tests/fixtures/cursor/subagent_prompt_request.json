@@ -1,0 +1,27 @@
+{
+  "capture": {
+    "source": "sanitized-contract-fixture",
+    "captured_at": "2026-04-24T00:00:00-04:00",
+    "endpoint": "/v1/chat/completions",
+    "notes": "Represents the safest gateway interpretation if Cursor forwards subagent work as ordinary chat."
+  },
+  "request": {
+    "model": "gpt-4o-mini",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a focused codebase explorer. Return concise findings only."
+      },
+      {
+        "role": "user",
+        "content": "Inspect the placeholder project structure and summarize relevant files. Do not access private data."
+      }
+    ],
+    "stream": true
+  },
+  "expected_gateway_contract": {
+    "accepted": true,
+    "treated_as": "ordinary_chat",
+    "cursor_native_subagent_protocol_observed": false
+  }
+}

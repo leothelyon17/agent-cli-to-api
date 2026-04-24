@@ -258,15 +258,9 @@ def extract_image_urls_from_content(content: Any) -> list[str]:
 
     # Accept single-part formats in addition to the OpenAI list-of-parts format.
     if isinstance(content, dict):
-        part_type = content.get("type")
-        if part_type in {"image_url", "input_image"}:
-            image = content.get("image_url")
-            if isinstance(image, dict):
-                url = image.get("url")
-                if isinstance(url, str) and url:
-                    urls.append(url)
-            elif isinstance(image, str) and image:
-                urls.append(image)
+        url = _extract_image_url_from_part(content)
+        if url is not None:
+            urls.append(url)
         return urls
 
     if not isinstance(content, list):
@@ -275,18 +269,28 @@ def extract_image_urls_from_content(content: Any) -> list[str]:
     for part in content:
         if not isinstance(part, dict):
             continue
-        part_type = part.get("type")
-        if part_type not in {"image_url", "input_image"}:
-            continue
-        image = part.get("image_url")
-        if isinstance(image, dict):
-            url = image.get("url")
-            if isinstance(url, str) and url:
-                urls.append(url)
-        elif isinstance(image, str) and image:
-            urls.append(image)
+        url = _extract_image_url_from_part(part)
+        if url is not None:
+            urls.append(url)
 
     return urls
+
+
+def _extract_image_url_from_part(part: dict[str, Any]) -> str | None:
+    part_type = part.get("type")
+    if part_type not in {"image_url", "input_image"}:
+        return None
+    image = part.get("image_url")
+    if isinstance(image, dict):
+        url = image.get("url")
+        if isinstance(url, str) and url.strip():
+            return url.strip()
+    if isinstance(image, str) and image.strip():
+        return image.strip()
+    url = part.get("url")
+    if isinstance(url, str) and url.strip():
+        return url.strip()
+    return None
 
 
 def extract_image_urls(messages: list[ChatMessage]) -> list[str]:

@@ -1,0 +1,63 @@
+{
+  "capture": {
+    "source": "sanitized-contract-fixture-based-on-prior-gateway-test",
+    "captured_at": "2026-04-24T00:00:00-04:00",
+    "notes": "JSON representation of target OpenAI-compatible SSE events for WP-3. Each item is the JSON object after the SSE data prefix."
+  },
+  "events": [
+    {
+      "id": "chatcmpl-cursor-fixture",
+      "object": "chat.completion.chunk",
+      "created": 1777032000,
+      "model": "gpt-4o-mini",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant"
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-cursor-fixture",
+      "object": "chat.completion.chunk",
+      "created": 1777032000,
+      "model": "gpt-4o-mini",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "id": "call_cursor_001",
+                "type": "function",
+                "function": {
+                  "name": "run_terminal_cmd",
+                  "arguments": "{\"command\":\"pwd\"}"
+                }
+              }
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-cursor-fixture",
+      "object": "chat.completion.chunk",
+      "created": 1777032000,
+      "model": "gpt-4o-mini",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {},
+          "finish_reason": "tool_calls"
+        }
+      ]
+    }
+  ],
+  "done": "[DONE]"
+}

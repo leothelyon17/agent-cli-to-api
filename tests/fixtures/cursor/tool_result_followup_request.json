@@ -1,0 +1,41 @@
+{
+  "capture": {
+    "source": "sanitized-contract-fixture",
+    "captured_at": "2026-04-24T00:00:00-04:00",
+    "endpoint": "/v1/chat/completions",
+    "notes": "Expected OpenAI Chat Completions follow-up if Cursor executes a tool client-side."
+  },
+  "request": {
+    "model": "gpt-4o-mini",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Run a harmless workspace path check."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_cursor_001",
+            "type": "function",
+            "function": {
+              "name": "run_terminal_cmd",
+              "arguments": "{\"command\":\"pwd\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_cursor_001",
+        "content": "{\"stdout\":\"/workspace\",\"stderr\":\"\",\"exit_code\":0}"
+      }
+    ],
+    "stream": true
+  },
+  "expected_gateway_contract": {
+    "accepted": true,
+    "codex_input_type": "function_call_output"
+  }
+}

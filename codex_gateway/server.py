@@ -35,11 +35,13 @@ from .codex_responses import (
     convert_chat_completions_to_codex_responses,
     extract_codex_usage_headers,
     extract_codex_tool_calls,
+    extract_codex_tool_calls_from_output_item,
     iter_codex_responses_events,
     load_codex_auth,
     maybe_refresh_codex_auth,
     warmup_codex_auth,
 )
+from .cursor_compat import format_streaming_tool_calls, normalize_cursor_chat_request
 from .config import settings
 from .claude_oauth import generate_oauth as claude_oauth_generate
 from .claude_oauth import iter_oauth_stream_events as iter_claude_oauth_events
@@ -175,8 +177,8 @@ async def _handle_request_validation_error(request: Request, exc: RequestValidat
         "[validation] status=422 method=%s path=%s detail=%s body=%s",
         request.method,
         request.url.path,
-        _truncate_for_log(detail),
-        _truncate_for_log(body_text),
+        _truncate_for_log(_redact_text_for_log(detail)),
+        _truncate_for_log(_redact_text_for_log(body_text)),
     )
     return await request_validation_exception_handler(request, exc)
 
@@ -455,8 +457,66 @@ def _truncate_for_log(text: str) -> str:
     return f"{text[:limit]}\n... (truncated, {len(text)} chars total)"
 
 
+_SENSITIVE_LOG_KEYS = {
+    "api_key",
+    "apikey",
+    "access_token",
+    "authorization",
+    "bearer",
+    "client_secret",
+    "cookie",
+    "id_token",
+    "password",
+    "refresh_token",
+    "secret",
+    "session",
+    "token",
+}
+
+
+def _redact_text_for_log(text: str) -> str:
+    """Redact common credential and inline image patterns before log truncation."""
+    redacted = re.sub(r"(?i)Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>", text)
+    return re.sub(r"data:image/[^,;\s]+;base64,[A-Za-z0-9+/=\r\n]+", "data:image/*;base64,<redacted>", redacted)
+
+
+def _is_sensitive_log_key(key: object) -> bool:
+    if not isinstance(key, str):
+        return False
+    normalized = key.lower().replace("-", "_")
+    if normalized in _SENSITIVE_LOG_KEYS:
+        return True
+    if normalized.endswith("_token") or normalized.endswith("_secret"):
+        return True
+    return any(part in normalized for part in {"authorization", "password", "api_key"})
+
+
+def _redact_payload_for_log(value: object) -> object:
+    """Return a log-safe copy with credentials and bulky inline images redacted."""
+    if isinstance(value, list):
+        return [_redact_payload_for_log(item) for item in value]
+    if isinstance(value, str):
+        if value.startswith("data:image/"):
+            return _summarize_data_url_for_log(value)
+        return _redact_text_for_log(value)
+    if not isinstance(value, dict):
+        return value
+
+    redacted: dict[object, object] = {}
+    for key, item in value.items():
+        if _is_sensitive_log_key(key):
+            redacted[key] = "<redacted>"
+        else:
+            redacted[key] = _redact_payload_for_log(item)
+    return redacted
+
+
+def _json_for_log(value: object) -> str:
+    return json.dumps(_redact_payload_for_log(value), ensure_ascii=False, default=str)
+
+
 def _inline_log_text(text: str) -> str:
-    return _truncate_for_log(text).replace("\r", "").replace("\n", "\\n")
+    return _truncate_for_log(_redact_text_for_log(text)).replace("\r", "").replace("\n", "\\n")
 
 
 def _stream_inline_append(resp_id: str, text: str) -> None:
@@ -708,18 +768,23 @@ def _build_curl_command(
     payload: dict[str, object],
     stream: bool,
 ) -> str:
-    payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
+    payload_json = json.dumps(_redact_payload_for_log(payload), ensure_ascii=False, indent=2)
     delimiter = _pick_curl_delimiter(payload_json)
     flags = "-sS"
     if stream:
         flags += " -N"
     lines = [f"curl {flags} -X POST {url} \\", "  -H 'Content-Type: application/json' \\"]
     if authorization:
-        lines.append(f"  -H 'Authorization: {authorization}' \\")
+        lines.append("  -H 'Authorization: Bearer <redacted>' \\")
     lines.append(f"  -d @- <<'{delimiter}'")
     lines.append(payload_json)
     lines.append(delimiter)
     return "\n".join(lines)
+
+
+def _redact_image_payload_for_log(value: object) -> object:
+    """Return a log-safe payload copy with inline image data replaced by metadata."""
+    return _redact_payload_for_log(value)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1141,6 +1206,38 @@ def _decode_data_url(data_url: str) -> tuple[bytes, str]:
     return data, _mime_to_ext(mime)
 
 
+def _summarize_data_url_for_log(data_url: str) -> str:
+    try:
+        data, ext = _decode_data_url(data_url)
+        return f"data:image/{ext};base64,<redacted:{len(data)} bytes>"
+    except Exception:
+        return "data:image/*;base64,<redacted>"
+
+
+def _validate_request_images(image_urls: list[str]) -> None:
+    if not settings.enable_image_input or not image_urls:
+        return
+
+    max_count = max(settings.max_image_count, 0)
+    if max_count == 0:
+        raise HTTPException(status_code=413, detail="Image input count exceeds configured limit (0)")
+    if len(image_urls) > max_count:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many image inputs ({len(image_urls)} > {max_count})",
+        )
+
+    for url in image_urls:
+        if not url.startswith("data:"):
+            continue
+        data, _ext = _decode_data_url(url)
+        if settings.max_image_bytes > 0 and len(data) > settings.max_image_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Image too large ({len(data)} bytes > {settings.max_image_bytes})",
+            )
+
+
 def _materialize_request_images(
     req: ChatCompletionRequest, *, resp_id: str
 ) -> tuple[tempfile.TemporaryDirectory | None, list[str]]:
@@ -1538,7 +1635,8 @@ async def chat_completions(
     _check_auth(authorization)
     try:
         req = compat_chat_request_to_chat_request(req)
-    except ValueError as e:
+        req = normalize_cursor_chat_request(req)
+    except (RequestInputError, ValueError) as e:
         return _openai_error(str(e), status_code=422)
 
     log_mode = settings.effective_log_mode()
@@ -1596,6 +1694,12 @@ async def chat_completions(
     t0 = time.time()
 
     image_urls = extract_image_urls(req.messages)
+    try:
+        _validate_request_images(image_urls)
+    except HTTPException as e:
+        return _openai_error(str(e.detail), status_code=e.status_code)
+    except Exception as e:
+        return _openai_error(f"Failed to decode image input: {e}", status_code=400)
     file_inputs = extract_file_inputs(req.messages)
     use_claude_oauth = bool(provider == "claude" and settings.claude_use_oauth_api)
     use_gemini_cloudcode = bool(provider == "gemini" and settings.gemini_use_cloudcode_api)
@@ -1783,10 +1887,17 @@ async def chat_completions(
                     cmd = item.get("command") or ""
                     status = item.get("status") or ""
                     exit_code = item.get("exit_code")
-                    logger.info("[%s] codex %s command status=%s exit=%s cmd=%s", resp_id, t, status, exit_code, cmd)
+                    logger.info(
+                        "[%s] codex %s command status=%s exit=%s cmd=%s",
+                        resp_id,
+                        t,
+                        status,
+                        exit_code,
+                        _inline_log_text(str(cmd)),
+                    )
                     out = item.get("aggregated_output")
                     if isinstance(out, str) and out.strip():
-                        logger.info("[%s] codex command output:\n%s", resp_id, _truncate_for_log(out))
+                        logger.info("[%s] codex command output:\n%s", resp_id, _truncate_for_log(_redact_text_for_log(out)))
                     return
                 if itype == "file_change":
                     changes = item.get("changes") or []
@@ -1815,24 +1926,15 @@ async def chat_completions(
                     )
                     args = item.get("arguments")
                     if args:
-                        try:
-                            dumped = json.dumps(args, ensure_ascii=False, default=str)
-                        except Exception:
-                            dumped = str(args)
+                        dumped = _json_for_log(args)
                         logger.info("[%s] codex mcp_tool_call args:\n%s", resp_id, _truncate_for_log(dumped))
                     err = item.get("error")
                     if err:
-                        try:
-                            dumped = json.dumps(err, ensure_ascii=False, default=str)
-                        except Exception:
-                            dumped = str(err)
+                        dumped = _json_for_log(err)
                         logger.warning("[%s] codex mcp_tool_call error:\n%s", resp_id, _truncate_for_log(dumped))
                     result = item.get("result")
                     if result:
-                        try:
-                            dumped = json.dumps(result, ensure_ascii=False, default=str)
-                        except Exception:
-                            dumped = str(result)
+                        dumped = _json_for_log(result)
                         logger.info("[%s] codex mcp_tool_call result:\n%s", resp_id, _truncate_for_log(dumped))
                     return
                 if itype == "agent_message":
@@ -2482,6 +2584,15 @@ async def chat_completions(
                                                 if parsed_calls:
                                                     stream_tool_calls = parsed_calls
                                             break
+                                        if evt.get("type") == "response.output_item.done":
+                                            item = evt.get("item")
+                                            if isinstance(item, dict):
+                                                parsed_calls = extract_codex_tool_calls_from_output_item(item)
+                                                if parsed_calls:
+                                                    stream_tool_calls = [
+                                                        *(stream_tool_calls or []),
+                                                        *parsed_calls,
+                                                    ]
                                     else:
                                         if evt.get("type") == "item.completed":
                                             item = evt.get("item") or {}
@@ -2549,12 +2660,19 @@ async def chat_completions(
                         ],
                     }
                     if stream_tool_calls:
+                        streaming_tool_calls = format_streaming_tool_calls(stream_tool_calls)
                         tool_chunk = {
                             "id": resp_id,
                             "object": "chat.completion.chunk",
                             "created": created,
                             "model": requested_model,
-                            "choices": [{"index": 0, "delta": {"tool_calls": stream_tool_calls}, "finish_reason": None}],
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"tool_calls": streaming_tool_calls},
+                                    "finish_reason": None,
+                                }
+                            ],
                         }
                         yield f"data: {json.dumps(tool_chunk, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps(end, ensure_ascii=False)}\n\n"

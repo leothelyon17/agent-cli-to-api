@@ -198,6 +198,45 @@ def extract_codex_usage_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return out
 
 
+def _extract_codex_tool_call_from_item(item: dict[str, Any], *, fallback_index: int) -> dict[str, Any] | None:
+    item_type = item.get("type")
+    func = item.get("function")
+    name = None
+    arguments = None
+    if isinstance(func, dict):
+        name = func.get("name")
+        arguments = func.get("arguments")
+    if item_type in {"tool_call", "function_call"} or (
+        isinstance(item.get("call_id"), str) and isinstance(item.get("name"), str)
+    ):
+        if name is None:
+            name = item.get("name")
+        if arguments is None:
+            arguments = item.get("arguments")
+        call_id = item.get("call_id") or item.get("id")
+        if not isinstance(call_id, str) or not call_id:
+            call_id = f"call_{fallback_index + 1}"
+        if not isinstance(name, str) or not name:
+            name = "tool"
+        if not isinstance(arguments, str):
+            try:
+                arguments = json.dumps(arguments or {}, ensure_ascii=False)
+            except Exception:
+                arguments = "{}"
+        return {
+            "id": call_id,
+            "type": "function",
+            "function": {"name": name, "arguments": arguments},
+        }
+    return None
+
+
+def extract_codex_tool_calls_from_output_item(item: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract OpenAI-style tool calls from a Codex output item event payload."""
+    tool_call = _extract_codex_tool_call_from_item(item, fallback_index=0)
+    return [tool_call] if tool_call is not None else []
+
+
 def extract_codex_tool_calls(response: dict[str, Any]) -> list[dict[str, Any]]:
     output = response.get("output")
     if not isinstance(output, list):
@@ -207,37 +246,9 @@ def extract_codex_tool_calls(response: dict[str, Any]) -> list[dict[str, Any]]:
     for item in output:
         if not isinstance(item, dict):
             continue
-        item_type = item.get("type")
-        func = item.get("function")
-        name = None
-        arguments = None
-        if isinstance(func, dict):
-            name = func.get("name")
-            arguments = func.get("arguments")
-        if item_type in {"tool_call", "function_call"} or (
-            isinstance(item.get("call_id"), str) and isinstance(item.get("name"), str)
-        ):
-            if name is None:
-                name = item.get("name")
-            if arguments is None:
-                arguments = item.get("arguments")
-            call_id = item.get("call_id") or item.get("id")
-            if not isinstance(call_id, str) or not call_id:
-                call_id = f"call_{len(tool_calls) + 1}"
-            if not isinstance(name, str) or not name:
-                name = "tool"
-            if not isinstance(arguments, str):
-                try:
-                    arguments = json.dumps(arguments or {}, ensure_ascii=False)
-                except Exception:
-                    arguments = "{}"
-            tool_calls.append(
-                {
-                    "id": call_id,
-                    "type": "function",
-                    "function": {"name": name, "arguments": arguments},
-                }
-            )
+        tool_call = _extract_codex_tool_call_from_item(item, fallback_index=len(tool_calls))
+        if tool_call is not None:
+            tool_calls.append(tool_call)
     return tool_calls
 
 
@@ -503,6 +514,8 @@ def convert_chat_completions_to_codex_responses(
                     url = image["url"]
                 elif isinstance(image, str):
                     url = image
+                elif isinstance(part.get("url"), str):
+                    url = part["url"]
                 if isinstance(url, str) and url:
                     msg["content"].append({"type": "input_image", "image_url": url})
             if ptype in {"file", "input_file"} and role == "user":
@@ -579,6 +592,12 @@ async def collect_codex_responses_text_and_usage(
         # Some very short responses can arrive only as a final "done" event.
         if t == "response.output_text.done" and not chunks and isinstance(evt.get("text"), str):
             chunks.append(evt["text"])
+        if t == "response.output_item.done":
+            item = evt.get("item")
+            if isinstance(item, dict):
+                parsed = extract_codex_tool_calls_from_output_item(item)
+                if parsed:
+                    tool_calls = [*(tool_calls or []), *parsed]
         if t == "response.completed":
             resp = evt.get("response") or {}
             u = resp.get("usage") if isinstance(resp, dict) else None

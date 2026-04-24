@@ -20,3 +20,5 @@ build/
 # Gateway-local Codex home (avoid committing auth/config)
 .codex-gateway-home/
 .codex_home*/
+
+docs/

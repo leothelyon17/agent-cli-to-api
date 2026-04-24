@@ -22,6 +22,7 @@ Why this exists:
 - [Install](#install)
 - [Run (No `.env` Needed)](#run-no-env-needed)
 - [Core Configuration](#core-configuration)
+- [Cursor custom endpoint setup](#cursor-custom-endpoint-setup)
 - [API](#api)
 - [OpenAI SDK examples](#openai-sdk-examples)
 - [Security notes](#security-notes)
@@ -170,6 +171,53 @@ cloudflared tunnel --url http://127.0.0.1:8000
 ```
 
 For advanced env vars, see `.env.example` and `codex_gateway/config.py`.
+
+## Cursor custom endpoint setup
+
+Cursor can use this gateway as a custom OpenAI-compatible chat model endpoint.
+Use the local URL for direct workstation testing and the public URL for Cursor
+IDE custom provider configuration, because Cursor BYOK traffic can be routed
+through Cursor cloud infrastructure.
+
+Local gateway:
+
+```bash
+CODEX_GATEWAY_TOKEN=devtoken uv run agent-cli-to-api codex --host 127.0.0.1 --port 8000
+```
+
+Cursor/local base URLs:
+
+| Use case | Base URL |
+| --- | --- |
+| Local/direct smoke testing | `http://127.0.0.1:8000/v1` |
+| Home-lab direct route | `https://codex-gateway-cursor.home.nerdylyonsden.io/v1` |
+| Cursor public custom endpoint | `https://ccgateway.nerdylyonsden.io/v1` |
+
+Set Cursor's custom OpenAI-compatible API key to the gateway bearer token
+(`CODEX_GATEWAY_TOKEN` locally or `CODEX_GATEWAY_TOKEN_CURSOR` for the deployed
+Cursor variant).
+
+Feature support is limited to behavior Cursor forwards to the custom endpoint:
+
+| Feature | Status through custom endpoint |
+| --- | --- |
+| Text chat | Supported by the gateway and covered by Cursor fixtures. |
+| OpenAI tool definitions | Supported by the gateway; Cursor IDE execution of custom-endpoint tool calls is not proven. |
+| Tool result follow-up | Supported if Cursor sends OpenAI `role: "tool"` messages. |
+| Subagents | Not a gateway-only guarantee; handled as ordinary chat unless Cursor forwards a standard tool protocol. |
+| Image upload | Gateway-supported for OpenAI image parts; live Cursor image forwarding remains unverified. |
+| Tab Completion | Not supported through this endpoint; Cursor uses built-in routes. |
+| Background Agents | Not supported through this endpoint; no custom-endpoint protocol has been observed. |
+
+Smoke local or deployed Cursor compatibility with:
+
+```bash
+BASE_URL=http://127.0.0.1:8000/v1 TOKEN=devtoken MODEL=gpt-5.4-mini bash scripts/smoke_cursor.sh
+BASE_URL=https://ccgateway.nerdylyonsden.io/v1 TOKEN="$CODEX_GATEWAY_TOKEN_CURSOR" MODEL=gpt-5.4-mini bash scripts/smoke_cursor.sh
+```
+
+Detailed setup, feature notes, request capture, and troubleshooting are in
+[`docs/cursor-compatibility.md`](docs/cursor-compatibility.md).
 
 ## API
 
