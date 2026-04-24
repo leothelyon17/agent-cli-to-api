@@ -252,6 +252,40 @@ class CursorCompatTests(unittest.TestCase):
         )
         self.assertEqual(req.model_extra["tool_choice"]["function"]["name"], "run_terminal_cmd")
 
+    def test_flat_cursor_tool_with_function_type_normalizes_to_function_tool(self) -> None:
+        """Test Cursor function tools without nested function objects are accepted."""
+        # Arrange
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "run pwd"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "run_terminal_cmd",
+                    "description": "Run a terminal command.",
+                    "parameters": {"type": "object"},
+                }
+            ],
+        }
+
+        # Act
+        req = _normalize_request_payload(payload)
+
+        # Assert
+        self.assertEqual(
+            req.model_extra["tools"],
+            [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "run_terminal_cmd",
+                        "description": "Run a terminal command.",
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ],
+        )
+
     def test_cursor_content_part_variants_normalize_to_canonical_parts(self) -> None:
         """Test Cursor image and file content variants normalize to canonical OpenAI parts."""
         # Arrange

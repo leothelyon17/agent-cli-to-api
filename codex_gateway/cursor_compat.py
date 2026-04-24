@@ -175,6 +175,8 @@ def _normalize_tool(tool: Any) -> dict[str, Any]:
         raise RequestInputError("Invalid tool definition: each tool must be an object")
     if tool.get("type") == "function":
         function = tool.get("function")
+        if function is None and _looks_like_flat_function_tool(tool):
+            return _normalize_function_tool(tool)
         if not isinstance(function, dict):
             raise RequestInputError("Invalid tool definition: function tool requires a function object")
         return _normalize_function_tool(function, outer=tool)
@@ -183,6 +185,10 @@ def _normalize_tool(tool: Any) -> dict[str, Any]:
         if isinstance(function, dict):
             return _normalize_function_tool(function, outer=tool)
     return _normalize_function_tool(tool)
+
+
+def _looks_like_flat_function_tool(tool: dict[str, Any]) -> bool:
+    return any(key in tool for key in ("name", "description", "parameters", "input_schema"))
 
 
 def _normalize_function_tool(function: Any, *, outer: dict[str, Any] | None = None) -> dict[str, Any]:
